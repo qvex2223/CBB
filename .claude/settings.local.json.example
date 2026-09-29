@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(interactsh-client:*)",
+      "Bash(echo *)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "burpmcp",
+    "playwright"
+  ]
+}

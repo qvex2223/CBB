@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "burpmcp": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/opt/Claude-BugHunter/runtime/burp-bridge.mjs"],
+      "timeout": 180000
+    },
+    "playwright": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/opt/Claude-BugHunter/runtime/playwright-mcp.mjs"],
+      "timeout": 180000
+    }
+  }
+}

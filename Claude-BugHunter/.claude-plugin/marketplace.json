@@ -1,0 +1,33 @@
+{
+  "name": "elementalsouls",
+  "owner": {
+    "name": "Sachin Sharma",
+    "url": "https://github.com/elementalsouls"
+  },
+  "metadata": {
+    "description": "Offensive-security skill bundles for Claude Code by ElementalSoul.",
+    "version": "2.1.0"
+  },
+  "plugins": [
+    {
+      "name": "claude-bughunter",
+      "source": "./",
+      "description": "62-skill web application bug-hunting bundle — 40+ hunt-* web/vuln-class + framework skills (XSS, SQLi, IDOR, SSRF, OAuth, GraphQL, SSTI, and more), web recon, reporting & validation gates, Burp MCP integration. Skills auto-load by topic; 16 slash commands.",
+      "version": "2.1.0",
+      "author": {
+        "name": "Sachin Sharma",
+        "url": "https://github.com/elementalsouls"
+      },
+      "homepage": "https://elementalsouls.github.io/Claude-BugHunter",
+      "category": "security",
+      "tags": [
+        "security",
+        "web-security",
+        "bug-bounty",
+        "pentest",
+        "recon",
+        "hunt"
+      ]
+    }
+  ]
+}
