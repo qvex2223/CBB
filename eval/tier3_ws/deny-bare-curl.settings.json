@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command",
+           "command": "python3 /opt/Claude/Claude-BugHunter/eval/tier3_ws/deny_bare_curl.py"}
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {"matcher": "Bash",
+       "hooks": [{"type": "command", "command": "python3 /opt/Claude/Claude-BugHunter/scripts/hunt-nudge.py"}]}
+    ]
+  }
+}

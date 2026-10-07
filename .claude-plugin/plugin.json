@@ -1,0 +1,12 @@
+{
+  "name": "claude-bughunter",
+  "description": "66-skill web application bug-hunting bundle for Claude Code \u2014 40+ hunt-* web/vuln-class + framework skills (XSS, SQLi, IDOR, SSRF, OAuth, GraphQL, SSTI, deserialization, and more), web recon, reporting & validation gates, and Burp MCP integration. Skills auto-load by topic; 21 slash commands included.",
+  "version": "2.1.0",
+  "author": {
+    "name": "Sachin Sharma",
+    "url": "https://github.com/elementalsouls"
+  },
+  "homepage": "https://elementalsouls.github.io/Claude-BugHunter",
+  "repository": "https://github.com/elementalsouls/Claude-BugHunter",
+  "license": "MIT"
+}

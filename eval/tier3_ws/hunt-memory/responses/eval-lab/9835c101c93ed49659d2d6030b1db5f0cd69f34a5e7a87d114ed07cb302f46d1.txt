@@ -1,0 +1,7 @@
+HTTP/1.0 200 OK
+Server: tier2/1.0 Python/3.13.12
+Date: Tue, 08 Sep 2026 16:42:55 GMT
+Content-Type: application/json
+Content-Length: 40
+
+{"id": 2, "name": "bob", "role": "user"}

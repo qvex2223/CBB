@@ -1,0 +1,5 @@
+{
+  "min_interval_seconds": 0.5,
+  "max_concurrency": 4,
+  "required_headers": {}
+}
