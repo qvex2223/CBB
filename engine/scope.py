@@ -389,6 +389,13 @@ def _selftest():
 
     # ---- markdown token cleaning (real scope.md files wrap patterns in backticks) ----
     assert _clean_token("`*.example.com`") == "*.example.com"
+    # full-URL assets normalize to their host (Intigriti renders domains as URLs)
+    assert _clean_token("https://oma.posti.fi/") == "oma.posti.fi"
+    assert _clean_token("https://www.webproteus.com/lpro-web/login") == "www.webproteus.com"
+    md = _scope_from_md.__wrapped__ if hasattr(_scope_from_md, "__wrapped__") else None
+    s_url = Scope(in_scope=["https://oma.posti.fi/", "oma.posti.fi"])
+    assert s_url.in_scope_host("https://oma.posti.fi/api/x")
+    assert not s_url.in_scope_host("https://evil.com")
     assert _clean_token("**api.example.com**") == "api.example.com"
     assert _clean_token("`10.0.0.0/8`,") == "10.0.0.0/8"
     assert _is_pattern("*.example.com")
@@ -427,7 +434,16 @@ def _clean_token(tok):
             t = t[:-2]
         if t == before:
             break
-    return t.strip()
+    t = t.strip()
+    # Programs publish some domains as full URLs (`https://oma.posti.fi/`,
+    # `https://www.webproteus.com/lpro-web/login`). The asset is the HOST — the
+    # scheme/path is decoration from the portal's rendering. Left as-is the token
+    # fails _is_pattern (":" and "/" are not host chars) and is silently dropped,
+    # so a whole class of in-scope assets falls out of the gate to default-deny.
+    m = re.match(r"^[a-z][a-z0-9+.\-]*://([^/?#@]+)", t, re.I)
+    if m:
+        t = m.group(1).rstrip(".")
+    return t
 
 
 def _is_pattern(tok):
