@@ -73,3 +73,6 @@ __pycache__/
 *.pyc
 *.bak*
 .sweep-env
+
+# Pre-corpus editor backups
+*.pre-corpus
