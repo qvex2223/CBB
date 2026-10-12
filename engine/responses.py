@@ -51,22 +51,22 @@ REDACTED = "<redacted>"
 # the *response* to that call repeats both inside the returned URL. On a live telecom
 # program those two fields are a subscriber's identity, so they are masked everywhere a
 # request line, a body or a stored response is written down.
-PII_KEY_RE = re.compile(
-    r"^(iin|personiin|donoriin|msisdn|simmsisdn|phone|phonenumber|phone_number|"
-    r"contactphone|contact_phone|contactnumber|contact_number|passport|imsi|icc|iccid|"
-    r"login|email|birthdate|birth_date)$", re.I)
+# An optional `<owner>_` prefix is part of the key set: `company_email` and
+# `telephone_number` are the same PII as `email` and `phone`, and the anchored
+# list missed both. A real person's work address and phone reached
+# hunt-memory/responses/ and a findings/*.md through `company_email` on
+# register-accpt.portofantwerpbruges.com before this was widened (2026-10-08).
+_PII_KEY_CORE = (
+    r"(?:[a-z0-9]{1,24}[_-])?(?:iin|personiin|donoriin|msisdn|simmsisdn|telephone|telephonenumber|telephone_number|phone|phonenumber|phone_number|contactphone|contact_phone|contactnumber|contact_number|passport|imsi|icc|iccid|login|email|birthdate|birth_date)"
+)
+PII_KEY_RE = re.compile(r"^" + _PII_KEY_CORE + r"$", re.I)
 
 _PII_QUERY_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_])((?:iin|personiin|donoriin|msisdn|simmsisdn|phone|phonenumber|"
-    r"phone_number|contactphone|contact_phone|contactnumber|contact_number|passport|imsi|"
-    r"icc|iccid|login|email|birthdate|birth_date))=([^&;#\s\"\']*)")
+    r"(?i)(?<![A-Za-z0-9_])(" + _PII_KEY_CORE + r")=([^&;#\s\"\']*)")
 _PII_JSON_RE = re.compile(
-    r"(?i)(\"(?:iin|personiin|donoriin|msisdn|simmsisdn|phone|phoneNumber|phone_number|"
-    r"contactPhone|contact_phone|contactNumber|contact_number|passport|imsi|icc|iccId|"
-    r"login|email|birthDate|birth_date)\"\s*:\s*)(\"[^\"]*\"|-?\d+)")
+    r"(?i)(\"" + _PII_KEY_CORE + r"\"\s*:\s*)(\"[^\"]*\"|-?\d+)")
 _PII_HEADERLINE_RE = re.compile(
-    r"(?im)^((?:iin|msisdn|x-msisdn|x-iin|phone|contact-phone|contact_phone|passport|login)"
-    r"\s*:\s*)(.+)$")
+    r"(?im)^((?:x-)?" + _PII_KEY_CORE + r"\s*:\s*)(.+)$")
 
 # Credential-shaped VALUES, wherever they appear in free text. SECRET_HEADER_RE above only
 # ever matched a header *name* on a command line, so a secret quoted inside a response body
@@ -81,6 +81,18 @@ _SECRET_TOKEN_RE = re.compile(
     r"([A-Za-z0-9_\-]{14,})")
 _BEARER_RE = re.compile(
     r"(?i)(bearer\s+)([A-Za-z0-9._\-]{6})([A-Za-z0-9._\-]{14,})")
+
+# Token-bearing JSON keys in a RESPONSE BODY. The patterns above only ever matched a
+# header name, a `Bearer ` prefix, or a known vendor prefix (`sk-`, `ghp_`, ...), so an
+# OAuth token endpoint answering
+#     {"access_token":"eyJ...","refresh_token":"eyJ...","scope":"..."}
+# walked straight past all of them. That is how a live Atlassian refresh token, valid for
+# ~90 days, landed in hunt-memory/responses/ unmasked on 2026-10-09 while proving the
+# Capital.com MCP scope-inflation finding. The key survives so the shape of the response
+# is still readable; the value does not.
+_TOKEN_JSON_RE = re.compile(
+    r"(?i)(\"(?:access_token|refresh_token|id_token|session_token|auth_token|"
+    r"client_secret|authorization_code)\"\s*:\s*)(\"[^\"]*\"|-?\d+)")
 
 
 def scrub_text(text: str) -> str:
@@ -97,6 +109,7 @@ def scrub_text(text: str) -> str:
         return text
     out = _PII_QUERY_RE.sub(lambda m: f"{m.group(1)}={REDACTED}", text)
     out = _PII_JSON_RE.sub(lambda m: f'{m.group(1)}"{REDACTED}"', out)
+    out = _TOKEN_JSON_RE.sub(lambda m: f'{m.group(1)}"{REDACTED}"', out)
     out = _PII_HEADERLINE_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", out)
     out = _SECRET_TOKEN_RE.sub(
         lambda m: f"{m.group(1)}<redacted-{len(m.group(1)) + len(m.group(2))}-chars>", out)

@@ -356,3 +356,49 @@ class CredentialScrubbing(unittest.TestCase):
         out = responses.scrub_text("iin=123456789012&contact_phone=77011234567")
         self.assertNotIn("123456789012", out)
         self.assertNotIn("77011234567", out)
+
+    def test_owner_prefixed_identity_keys_are_masked(self):
+        """`company_email` is the same PII as `email`.
+
+        The anchored key list matched only the bare spellings, so a real person's work
+        address and phone reached hunt-memory/responses/ and a findings/*.md through
+        `company_email` / `company_telephone_number` on
+        register-accpt.portofantwerpbruges.com (2026-10-08).
+        """
+        body = ('{"company_email":"someone@example.org",'
+                '"company_telephone_number":"03 246 02 30",'
+                '"telephone_number":"03 246 02 30","name":"LSP IRPTEST NHS"}')
+        out = responses.scrub_text(body)
+        self.assertNotIn("someone@example.org", out)
+        self.assertNotIn("03 246 02 30", out)
+        # the key itself, and non-identity fields, survive
+        self.assertIn("company_email", out)
+        self.assertIn("LSP IRPTEST NHS", out)
+
+    def test_owner_prefixed_identity_keys_are_masked_in_a_query_string_too(self):
+        out = responses.scrub_text("/x?company_email=someone@example.org&user_phone=32470000000")
+        self.assertNotIn("someone@example.org", out)
+        self.assertNotIn("32470000000", out)
+
+    def test_oauth_token_response_body_is_masked_but_scope_survives(self):
+        """An OAuth token endpoint's JSON body carries live credentials.
+
+        The header/prefix/Bearer patterns never matched a bare JSON key, so
+        {"access_token": "...", "refresh_token": "..."} went to disk intact. A live
+        Atlassian refresh token (~90 day lifetime) reached hunt-memory/responses/ that
+        way on 2026-10-09. The `scope` value must survive - on that finding it IS the
+        evidence.
+        """
+        body = ('{"access_token":"eyJraWQiOiJhdXRoLmF0bGFzc2lhbi5jb20tQUNDRVNT.a.b",'
+                '"token_type":"bearer","expires_in":3600,'
+                '"refresh_token":"eyJraWQiOiJSRUZSRVNI.x.y",'
+                '"scope":"offline_access read:servicedesk-request write:servicedesk-request"}')
+        out = responses.scrub_text(body)
+        self.assertNotIn("eyJraWQ", out)
+        self.assertIn("access_token", out)
+        self.assertIn("write:servicedesk-request", out)
+
+    def test_client_secret_in_a_json_body_is_masked_too(self):
+        out = responses.scrub_text('{"client_id":"public-id","client_secret":"s3cr3t-value-here"}')
+        self.assertNotIn("s3cr3t-value-here", out)
+        self.assertIn("public-id", out)
