@@ -1,0 +1,3 @@
+# Submitted reports
+
+# date | host | vuln | severity | status | link
