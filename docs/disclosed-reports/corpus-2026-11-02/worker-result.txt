@@ -1,0 +1,15 @@
+**41 records.**
+
+`docs/disclosed-reports/corpus-2026-11-02/corpus.json` — parses clean, 91 KB, ids `r-001`–`r-041`, no URL overlap with the previous corpus run.
+
+One deviation you should know about, recorded in `meta.notes`: **the "published after 2026-11-01" window yielded nothing.** That is a ~1-day window and I could not find a single qualifying Critical/High web-app disclosure in it — PortSwigger Research's RSS `lastBuildDate` is 2026-10-30, the newest Intigriti Bug Bytes is 2026-10-30, HackerOne hacktivity is a JS-only shell (no GraphQL access), and `bugcrowd.com/disclosures` now 404s. Rather than hand back 0 records I built the corpus from the most recent material I could verify: 24 records dated 2026-09-17 → 2026-10-29, the rest 2025-12 → 2026-08. `known-urls.txt` was empty (1 byte), so nothing was excluded on that basis; I deduped against the prior run's 103 URLs manually instead.
+
+What's in it:
+
+- **set**: 25 research, 13 writeup, 3 hackerone · **severity**: 24 critical, 3 high, 1 medium, 13 unknown (research posts that state no severity) · 18 carry a stated bounty
+- **Highest-value chains**: Edge full chain via logic bugs only ($175k), XBOW's Chrome full chain ($250k), Google DevSite Flask-session pickle RCE ($90k), 17 trillion Microsoft records via `alg:none` + `upn` confusion, Discord 1-click RCE via Twitch embed, PHP2Shell (CVE-2026-109618/19) from the primary research, AEM pre-auth RCE, PeopleSoft SSRF→RCE, PaperCut triple patch-bypass, Atlassian `..::` pre-auth file read
+- **lesson** skews `parser-differential` (11), then `composition` and `framework-internals` (5 each), `oracle` and `server-side-fetcher` (4 each)
+
+Two caveats worth carrying into whatever reads this: on the long slcyber.io and portswigger.net posts, WebFetch returned ~39 KB verbatim plus a model-extracted tail, so per-case bounty figures in those records are indicative rather than quoted. And six candidates were dropped for access reasons, not quality — medium.com returned HTTP 403 to all five Medium write-ups, and `bughunters.google.com` timed out twice.
+
+Only publishing pages were touched (hackerone.com `.json`, github.com, portswigger.net, lab/vendor blogs, hunter blogs). No request went to any programme's own assets, and I used only WebSearch plus the WebFetch-backed reader agent.

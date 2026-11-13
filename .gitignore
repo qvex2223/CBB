@@ -1,0 +1,108 @@
+# macOS
+.DS_Store
+._*
+
+# Claude Code per-project settings (auto-generated)
+.claude/
+
+# Editor backups
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Engagement artifacts — NEVER commit
+# (these end up in your local working dirs but should not enter the repo)
+evidence/
+*.har
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.mov
+# …but allow display assets under assets/ (banner, diagrams)
+!assets/*.png
+!assets/*.jpg
+!assets/*.jpeg
+findings/
+leads/
+primitives/
+refutations/
+# ad-hoc working captures: raw headers/bodies with live session tokens
+scratchpad/
+# fired-request captures: real response bytes, never versioned (specs .poc.json stay)
+*.result.json
+*-result.json
+submissions.txt
+notes.md
+/scope.md
+CLAUDE.md.local
+targets/
+
+# Local-only artifacts
+.obsidian/
+graphify-out/
+
+# Credential material that lives inside an engagement folder
+identity*.json
+browser-state*.json
+browser-profile*/
+hunt-memory/
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+*-credentials.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+# packaging build output (cbh is pip/pipx installable)
+build/
+dist/
+*.egg-info/
+
+# Node (if anyone adds tooling later)
+node_modules/
+
+# Test artifacts
+.pytest_cache/
+*.log
+
+# Local cbh recon outputs (when run from repo root)
+recon/
+
+# Maintainer-only plaintext client-identifier denylist (never commit names)
+scripts/.identifier-denylist.local
+
+# Local state
+runtime/
+logs/
+__pycache__/
+*.pyc
+*.bak*
+.sweep-env
+
+# Pre-corpus editor backups
+*.pre-corpus
+Targets/*/.secrets/
+Targets/*/*/.secrets/
+
+# Engagement data stays local. Unfixed third-party vulnerability detail must not
+# be published pre-fix (CLAUDE.md safety floor, and every program's own rules).
+# Only the scaffold a new engagement is copied from is versioned.
+/Targets/*
+!/Targets/_TEMPLATE/
+
+# Engagement scratch that lands at the repo root instead of in Targets/<name>/
+# `fired.txt` is a host+method+path map of everything a hunt actually sent: engagement
+# data, and the one root-level file `git add -A` would otherwise publish.
+/fired*.txt
+/co-handshake.json
+/cbh-h16-paths.json
+/need-status.txt

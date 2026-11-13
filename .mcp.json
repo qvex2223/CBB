@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/home/qvex/security-research/BugHunter/runtime/playwright-mcp.mjs"
+      ],
+      "timeout": 180000,
+      "env": {
+        "CBH_PLAYWRIGHT_HEADED": "1",
+        "CBH_PROJECT": "standoff365/mail_vk",
+        "CBH_PLAYWRIGHT_BROWSER": "firefox",
+        "CBH_PLAYWRIGHT_CHROME": "/home/qvex/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome"
+      }
+    },
+    "caido": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/home/qvex/security-research/BugHunter/runtime/caido-mcp.mjs"
+      ],
+      "timeout": 180000
+    }
+  }
+}

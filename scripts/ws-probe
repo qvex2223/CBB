@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""Gated raw WebSocket client: scope-checked, paced off profile.json, audited.
+
+No websocket library on this box, so framing is done by hand. Every outbound
+frame goes through the engagement pacing budget and lands in audit.jsonl with
+credential material redacted.
+"""
+import argparse, base64, json, os, re, socket, ssl, struct, sys, time
+from pathlib import Path
+
+ENGINE = Path("/home/qvex/security-research/BugHunter/engine")
+sys.path.insert(0, str(ENGINE.parent))
+from engine.pacing import Engagement          # noqa: E402
+from engine.memory import Memory              # noqa: E402
+
+def _project():
+    """Resolve the engagement the same way bbcurl does: CBH_PROJECT, else cwd.
+
+    Written generic on promotion (2026-10-30). The original was hard-coded to
+    standoff365/timewebcloud with its own inline allowlist, which would have
+    quietly carried one programme's scope onto the next target.
+    """
+    from engine.paths import targets_root
+    name = os.environ.get("CBH_PROJECT", "").strip("/")
+    if name:
+        cand = targets_root() / name
+        if cand.is_dir():
+            return cand
+        sys.exit(f"ws-probe: no engagement at {cand} (CBH_PROJECT={name!r})")
+    here = Path.cwd().resolve()
+    root = targets_root().resolve()
+    for d in (here, *here.parents):
+        if d.parent == root or (d.parent.parent == root and (d / "scope.md").is_file()):
+            return d
+    sys.exit("ws-probe: no engagement resolved. Set CBH_PROJECT=<platform>/<programme>.")
+
+
+def scope_check(host, project):
+    """Delegate to engine/scope.py so the programme's own scope.md decides.
+
+    A WebSocket client carrying its own allowlist would be a second source of
+    truth for scope, which is exactly how an out-of-scope host gets probed. The
+    original of this script hard-coded `*.timeweb.cloud` inline.
+    """
+    from engine.scope import _scope_from_md, IN_SCOPE
+    md = project / "scope.md"
+    if not md.is_file():
+        sys.exit(f"ws-probe: {md} missing — refusing to guess scope")
+    sc = _scope_from_md(md)
+    h = host.lower().strip(".")
+    # Scope.verify() returns a dict: {host, target, verdict, reason, ips, ...}
+    v = sc.verify(h)
+    verdict = v.get("verdict") if isinstance(v, dict) else v
+    if str(verdict).upper() != IN_SCOPE:
+        reason = (v.get("reason") if isinstance(v, dict) else None) or sc.reject_reason(h) or ""
+        sys.exit(f"SCOPE REFUSED: {host} -> {verdict} ({reason})")
+    return h
+
+def redact(s):
+    if not isinstance(s, str):
+        return s
+    # JWTs and any authorization value
+    s = re.sub(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}", "<redacted-jwt>", s)
+    s = re.sub(r'("authorization"\s*:\s*")[^"]+(")', r"\1<redacted>\2", s, flags=re.I)
+    s = re.sub(r"(Cookie:\s*)\S+", r"\1<redacted>", s, flags=re.I)
+    return s
+
+def frame(payload, opcode=0x1):
+    data = payload.encode() if isinstance(payload, str) else payload
+    mask = os.urandom(4)
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+    n = len(data)
+    if n < 126:
+        hdr = struct.pack("!BB", 0x80 | opcode, 0x80 | n)
+    elif n < 65536:
+        hdr = struct.pack("!BBH", 0x80 | opcode, 0x80 | 126, n)
+    else:
+        hdr = struct.pack("!BBQ", 0x80 | opcode, 0x80 | 127, n)
+    return hdr + mask + masked
+
+def read_exact(sock, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError("closed mid-frame")
+        buf += chunk
+    return buf
+
+def read_frame(sock):
+    b0, b1 = read_exact(sock, 2)
+    opcode = b0 & 0x0F
+    n = b1 & 0x7F
+    if n == 126:
+        n = struct.unpack("!H", read_exact(sock, 2))[0]
+    elif n == 127:
+        n = struct.unpack("!Q", read_exact(sock, 8))[0]
+    if b1 & 0x80:
+        mask = read_exact(sock, 4)
+        data = bytes(b ^ mask[i % 4] for i, b in enumerate(read_exact(sock, n)))
+    else:
+        data = read_exact(sock, n)
+    return opcode, data
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--host", required=True)
+    ap.add_argument("--path", default="/socket.io/?EIO=4&transport=websocket")
+    ap.add_argument("--origin")
+    ap.add_argument("--cookie")
+    ap.add_argument("--subprotocol")
+    ap.add_argument("--send", action="append", default=[],
+                    help="frame text; {{TOKEN}} and {{TOKEN2}} are substituted from env")
+    ap.add_argument("--listen", type=float, default=6.0, help="seconds to read after last send")
+    ap.add_argument("--label", default="wsprobe")
+    args = ap.parse_args()
+
+    project = _project()
+    host = scope_check(args.host, project)
+    eng = Engagement(project)
+    mem = Memory()
+    tok = {"{{TOKEN}}": os.environ.get("TW_TOKEN", ""), "{{TOKEN2}}": os.environ.get("TW_TOKEN2", "")}
+
+    eng.wait_turn()
+    key = base64.b64encode(os.urandom(16)).decode()
+    lines = [f"GET {args.path} HTTP/1.1", f"Host: {host}",
+             "Upgrade: websocket", "Connection: Upgrade",
+             f"Sec-WebSocket-Key: {key}", "Sec-WebSocket-Version: 13",
+             "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"]
+    if args.origin:
+        lines.append(f"Origin: {args.origin}")
+    if args.cookie:
+        lines.append(f"Cookie: {args.cookie}")
+    if args.subprotocol:
+        lines.append(f"Sec-WebSocket-Protocol: {args.subprotocol}")
+    req = "\r\n".join(lines) + "\r\n\r\n"
+
+    t0 = time.time()
+    ctx = ssl.create_default_context()
+    raw = socket.create_connection((host, 443), timeout=12)
+    sock = ctx.wrap_socket(raw, server_hostname=host)
+    sock.sendall(req.encode())
+    resp = b""
+    while b"\r\n\r\n" not in resp:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        resp += chunk
+    head, _, tail = resp.partition(b"\r\n\r\n")
+    status = head.split(b"\r\n")[0].decode(errors="replace")
+    print(f"--- {args.label} :: {args.host}{args.path}")
+    print(f"HANDSHAKE: {status}  ({time.time()-t0:.3f}s)")
+    for h in head.split(b"\r\n")[1:]:
+        print("  " + h.decode(errors="replace"))
+    mem.audit({"target": host, "tool": "wsprobe", "label": args.label,
+               "url": f"wss://{host}{args.path}", "method": "GET-UPGRADE",
+               "status": status, "origin": args.origin,
+               "cookie_sent": bool(args.cookie), "engagement": "timewebcloud"})
+    if "101" not in status:
+        print("no upgrade; stopping")
+        return
+
+    sock.settimeout(args.listen)
+    pending = list(args.send)
+    deadline = time.time() + args.listen
+    # frames already buffered after the handshake
+    buf = tail
+    def drain_buffer():
+        nonlocal buf
+        out = []
+        while len(buf) >= 2:
+            n = buf[1] & 0x7F
+            off = 2
+            if n == 126:
+                if len(buf) < 4: break
+                n = struct.unpack("!H", buf[2:4])[0]; off = 4
+            elif n == 127:
+                if len(buf) < 10: break
+                n = struct.unpack("!Q", buf[2:10])[0]; off = 10
+            if len(buf) < off + n: break
+            out.append((buf[0] & 0x0F, buf[off:off+n]))
+            buf = buf[off+n:]
+        return out
+
+    for op, data in drain_buffer():
+        print(f"  <<< {redact(data.decode(errors='replace'))}")
+
+    while True:
+        if pending:
+            payload = pending.pop(0)
+            for k, v in tok.items():
+                payload = payload.replace(k, v)
+            eng.wait_turn()
+            sock.sendall(frame(payload))
+            shown = payload
+            for k, v in tok.items():
+                if v:
+                    shown = shown.replace(v, "<redacted>")
+            print(f"  >>> {redact(shown)}")
+            mem.audit({"target": host, "tool": "wsprobe", "label": args.label,
+                       "url": f"wss://{host}{args.path}", "method": "WS-FRAME",
+                       "frame": redact(shown)[:200], "engagement": "timewebcloud"})
+            deadline = time.time() + args.listen
+        if time.time() > deadline and not pending:
+            break
+        try:
+            op, data = read_frame(sock)
+        except (socket.timeout, TimeoutError):
+            if pending:
+                continue
+            break
+        except (ConnectionError, OSError) as e:
+            print(f"  [closed: {e}]")
+            break
+        if op == 0x8:
+            print(f"  [server CLOSE] {data[:120]!r}")
+            break
+        if op in (0x9, 0xA):
+            continue
+        text = data.decode(errors="replace")
+        print(f"  <<< {redact(text)[:1200]}")
+        if text == "2":                      # engine.io PING -> PONG
+            sock.sendall(frame("3"))
+    try:
+        sock.sendall(frame(b"", 0x8)); sock.close()
+    except OSError:
+        pass
+
+if __name__ == "__main__":
+    main()

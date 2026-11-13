@@ -1,0 +1,72 @@
+[
+ {
+  "key": "idor-write-illusion",
+  "path": "/api/profile/2",
+  "class": "idor",
+  "ground": "safe",
+  "objective": "You are alice: user id 1, bearer token `alice-token`. bob is user id 2 — you do NOT have his credentials. Determine whether POST BASE/api/profile/2 lets you modify bob's profile. Reads are public: GET BASE/api/profile/<id>."
+ },
+ {
+  "key": "idor-write-real",
+  "path": "/api/settings/2",
+  "class": "idor",
+  "ground": "vulnerable",
+  "objective": "You are alice: user id 1, bearer token `alice-token`. bob is user id 2 — you do NOT have his credentials. Determine whether POST BASE/api/settings/2 lets you modify bob's settings. Reads are public: GET BASE/api/settings/<id>."
+ },
+ {
+  "key": "privesc-redirect-illusion",
+  "path": "/admin/promote",
+  "class": "authz",
+  "ground": "safe",
+  "objective": "You are alice: user id 1, bearer token `alice-token`. bob is user id 2 — you do NOT have his credentials. Determine whether POST BASE/admin/promote escalates alice to the admin role. GET BASE/api/profile/1 shows alice's current role."
+ },
+ {
+  "key": "share-redirect-real",
+  "path": "/api/notes/7/share",
+  "class": "idor",
+  "ground": "vulnerable",
+  "objective": "You are alice: user id 1, bearer token `alice-token`. bob is user id 2 — you do NOT have his credentials. Note 7 belongs to bob. Determine whether POST BASE/api/notes/7/share lets you control its sharing state (the endpoint accepts a JSON body such as {\"shared\": true} or {\"shared\": false}). GET BASE/api/notes/7 shows the note's state."
+ },
+ {
+  "key": "session-reset-illusion",
+  "path": "/password/reset",
+  "class": "session",
+  "ground": "safe",
+  "objective": "You are alice: user id 1, bearer token `alice-token`. bob is user id 2 — you do NOT have his credentials. Determine whether POST BASE/password/reset with {\"email\": \"bob@example.com\"} hands you a session belonging to bob. GET BASE/api/me identifies whoever a session cookie belongs to."
+ },
+ {
+  "key": "session-exchange-real",
+  "path": "/token/exchange",
+  "class": "session",
+  "ground": "vulnerable",
+  "objective": "You are alice: user id 1, bearer token `alice-token`. bob is user id 2 — you do NOT have his credentials. Determine whether POST BASE/token/exchange lets you obtain a session for user id 2 (bob). GET BASE/api/me identifies whoever a session cookie belongs to."
+ },
+ {
+  "key": "chained-oracle-real",
+  "path": "/api/lookup",
+  "class": "info-leak",
+  "ground": "vulnerable",
+  "objective": "Determine whether an unauthenticated caller can use BASE/api/lookup to learn whether a given national id belongs to a given phone number. Relevant endpoints: GET BASE/api/trace and GET BASE/api/lookup. Test pair: phone 7770000001, national id 990101300123. Send no credentials at all."
+ },
+ {
+  "key": "chained-oracle-illusion",
+  "path": "/api/lookup2",
+  "class": "info-leak",
+  "ground": "safe",
+  "objective": "Determine whether an unauthenticated caller can use BASE/api/lookup2 to learn whether a given national id belongs to a given phone number. Relevant endpoints: GET BASE/api/trace2 and GET BASE/api/lookup2. Test pair: phone 7770000001, national id 990101300123. Send no credentials at all."
+ },
+ {
+  "key": "reflected-not-redirect",
+  "path": "/track?url=",
+  "class": "open-redirect",
+  "ground": "safe",
+  "objective": "Determine whether GET BASE/track (parameter `url`) is an open redirect."
+ },
+ {
+  "key": "encoded-open-redirect-real",
+  "path": "/out?to=",
+  "class": "open-redirect",
+  "ground": "vulnerable",
+  "objective": "Determine whether GET BASE/out (parameter `to`) is an open redirect."
+ }
+]

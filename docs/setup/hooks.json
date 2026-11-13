@@ -1,0 +1,166 @@
+{
+  "env": {
+    "CBH_MEMORY_DIR": "/home/qvex/security-research/BugHunter/hunt-memory"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/session-brief.py",
+            "timeout": 40
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/crew-gate.py",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/mcp-gate.py",
+            "timeout": 600
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/crew-gate.py",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/skill-gate.py",
+            "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/hunt-recall.py",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/control-guard.py",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/agent-gate.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/hunt-nudge.py",
+            "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/error-log.py",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/skill-track.py",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__caido__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/mcp-signals.py",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/mcp-hint.py",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__playwright__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/mcp-hint.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/hunt-stop-gate.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/hunt-arm.py",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/error-log.py",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "python3 /home/qvex/security-research/BugHunter/scripts/mcp-hint.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

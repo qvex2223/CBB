@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# heavy-run — run a memory-hungry tool (jadx, apktool, gowitness, big ffuf/katana runs)
+# inside a cgroup memory cap so it gets OOM-killed instead of taking the machine down.
+#
+# Written 2026-10-20: `jadx -Xmx12g -j 8` on a 248 MB APK exhausted a 14 GB box and
+# crashed the operator's session. The cap is derived from what is free *now*.
+#
+#   heavy-run [--frac 0.5] [--max-gb N] [--] <command> [args...]
+#
+# - cap = min(MemAvailable × frac, max-gb); default frac 0.5, no max
+# - exported for the child: JAVA_TOOL_OPTIONS=-Xmx<80% of cap>  (JVM tools obey it)
+#                           HEAVY_THREADS=<min(nproc/2, cap in GB)>  (pass to -j / -t yourself)
+# - runs at nice 10; swap for the scope is disabled so the cap is real
+# - if systemd-run is unavailable it still runs, with a loud warning and no cap
+set -u
+frac=0.5; max_gb=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --frac) frac="$2"; shift 2 ;;
+    --max-gb) max_gb="$2"; shift 2 ;;
+    --) shift; break ;;
+    -h|--help) sed -n 2,15p "$0"; exit 0 ;;
+    *) break ;;
+  esac
+done
+[ $# -gt 0 ] || { echo "heavy-run: no command" >&2; exit 2; }
+
+avail_kb=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
+cap_mb=$(awk -v a="$avail_kb" -v f="$frac" 'BEGIN{printf "%d", a*f/1024}')
+if [ "$max_gb" != "0" ]; then
+  max_mb=$(( max_gb * 1024 )); [ "$cap_mb" -gt "$max_mb" ] && cap_mb=$max_mb
+fi
+[ "$cap_mb" -lt 512 ] && { echo "heavy-run: only ${cap_mb} MB would be allowed — free memory first" >&2; exit 3; }
+xmx_mb=$(( cap_mb * 8 / 10 ))
+cores=$(nproc); threads=$(( cores / 2 )); gb=$(( cap_mb / 1024 )); [ "$gb" -lt 1 ] && gb=1
+[ "$threads" -gt "$gb" ] && threads=$gb; [ "$threads" -lt 1 ] && threads=1
+export JAVA_TOOL_OPTIONS="-Xmx${xmx_mb}m ${JAVA_TOOL_OPTIONS:-}"
+export HEAVY_THREADS="$threads"
+echo "heavy-run: cap ${cap_mb} MB (of $((avail_kb/1024)) MB free) · -Xmx${xmx_mb}m · threads ${threads}" >&2
+
+if systemd-run --user --scope --quiet -p MemoryMax=1G true >/dev/null 2>&1; then
+  exec systemd-run --user --scope --quiet --nice=10 \
+       -p MemoryMax="${cap_mb}M" -p MemorySwapMax=0 -- "$@"
+fi
+echo "heavy-run: WARNING systemd-run --user unavailable — running WITHOUT a memory cap" >&2
+exec nice -n 10 "$@"

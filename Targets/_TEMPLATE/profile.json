@@ -1,0 +1,7 @@
+{
+  "project": "REPLACE-ME",
+  "min_interval_seconds": 10,
+  "max_concurrency": 2,
+  "required_headers": {},
+  "note": "Machine-readable engagement policy, enforced by engine/pacing.py — NOT prose. min_interval_seconds is a GLOBAL budget across the whole target set, not per host. If the program publishes a rate cap, stay well under it; if it publishes nothing, leave this conservative default. Put any header the program mandates on every request into required_headers with its real value (e.g. {\"X-Bug-Bounty\": \"yourlogin\"}) — a value of \"TODO\" or \"\" makes poc_runtime refuse to fire, which is the intended behaviour until you fill it in."
+}

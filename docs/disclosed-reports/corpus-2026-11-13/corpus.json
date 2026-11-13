@@ -1,0 +1,298 @@
+{
+ "meta": {
+  "source": "operator-supplied technique digest, mid-October to 13 November 2026, plus the URLs already in this folder's known-urls.txt",
+  "licence": "public research; mechanics summarised in our own words, no text copied",
+  "retrieved": "2026-11-13",
+  "notes": "Techniques, not disclosed bounty reports: `bounty` is null throughout and `severity` is the write-up's own end state where the digest stated one, `unknown` otherwise. Six entries carry no `source_url` because the digest named no URL and none was invented; their identifiers (CVE-2026-104269, GHSA-673q-mjm6-r5xr) are reproduced as claims to verify, not as facts. Every entry carries `landed_in`: the file where the check now lives. An entry with no `landed_in` is an ingested technique no agent can reach -- that is the thing this file exists to make visible. Measure with: cbh corpus-gap --corpus docs/disclosed-reports/corpus-2026-11-13/corpus.json Keywords are chosen to DISCRIMINATE: measured 2026-11-13 against a checkout without these checks, all 10 records FAIL the landed test, and against this one all 10 pass. A descriptive phrase does not discriminate -- corpus_gap._hit counts 60% of a phrase's words anywhere in the file, so a wordy keyword scores on vocabulary the skill already had. `source_url` is null on every record and the write-up link, where there is one, sits in `ref_url`: five of these URLs already carry a record in another corpus, and `engine/precedent.py` dedupes by `source_url`, so keeping it here would have dropped either this record or that one. These records are not a second copy of the research — they are the toolkit's landed version of it, with the safety gating and the stop points."
+ },
+ "reports": [
+  {
+   "id": "td13-01",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "nextjs",
+    "rce",
+    "deserialization"
+   ],
+   "first_signal": "A Next.js host answering `?_rsc=` and Server Action POSTs with `content-type: text/x-component` — the Flight format is parsed server-side, not only emitted",
+   "mechanic": "A React Flight payload describing several typed-array views over one ArrayBuffer makes the server-side deserialiser hand out overlapping views of the same bytes and reconstruct an object graph the application never defines; the write-up's end state is unauthenticated code execution. Identifiers seen for an RSC Next.js RCE: GHSA-673q-mjm6-r5xr (operator digest) and CVE-2025-55182 / CVE-2025-66478 (this URL) — whether they are one bug is unverified here.",
+   "chain": [
+    "Read the Next.js / react-server-dom version from the build id and framework chunk",
+    "Confirm the Flight parse surface answers without a cookie (`content-type: text/x-component`)",
+    "Compare the measured version against the advisory's affected range",
+    "Framing payload itself: approval-gated, a wrong frame takes the host down"
+   ],
+   "impact_proof": "Unauthenticated RCE per the advisory; in this workspace the landed check stops at the jarless `text/x-component` reachability capture plus the version read",
+   "keywords": [
+    "typed-array views",
+    "arraybuffer",
+    "x-component",
+    "ghsa-673q-mjm6-r5xr"
+   ],
+   "lesson": "a parse surface the client never calls is still reachable",
+   "landed_in": "skills/hunt-nextjs/SKILL.md (Phase 9)",
+   "source_url": null,
+   "ref_url": "https://www.slcyber.io/research/high-fidelity-detection-mechanism-for-rsc-next-js-rce-cve-2025-55182-cve-2025-66478"
+  },
+  {
+   "id": "td13-02",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "file-upload",
+    "parser-differential"
+   ],
+   "first_signal": "A multipart part that carries both `filename` and `filename*` is accepted without complaint",
+   "mechanic": "RFC 6266 / RFC 8187 make the extended `filename*` parameter win; a WAF that parses only `filename` sees `safe.jpg` while the application writes the `filename*` name, so the two layers disagree about what was uploaded. Reported against ModSecurity, Coraza, SamWaf and BunkerWeb (CVE-2026-104269 per the operator digest, unverified here). The harmless `filename` must precede the dangerous `filename*`.",
+   "chain": [
+    "Send one multipart part with both parameters, CRLF-exact, harmless content, unique marker",
+    "Read which name the response/listing/stored path kept",
+    "Fire the same part with only the dangerous name to tell a WAF block from a parser preference",
+    "Impact needs the stored object served back under the kept extension and that extension handled"
+   ],
+   "impact_proof": "A primitive on its own (two parsers disagree); a finding once the stored object is served and the extension is executed or rendered same-origin",
+   "keywords": [
+    "filename*",
+    "rfc 6266",
+    "rfc 8187",
+    "modsecurity",
+    "coraza",
+    "bunkerweb"
+   ],
+   "lesson": "one request can split a WAF from its backend",
+   "landed_in": "skills/hunt-file-upload/SKILL.md (One upload, two filenames)",
+   "source_url": null
+  },
+  {
+   "id": "td13-03",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "file-upload",
+    "xss",
+    "xxe"
+   ],
+   "first_signal": "An SVG upload accepted after sanitisation and served inline from the app's own origin",
+   "mechanic": "A sanitised SVG revives where something other than an element or attribute names a stylesheet: an `<?xml-stylesheet type=\"text/xsl\" href=\"data:...\"?>` processing instruction the DOM sanitiser never walks, a `Link: <...>; rel=stylesheet` response header the document does not contain, or Safari's `<use href>` / `@import` indirection. XSLT is a program.",
+   "chain": [
+    "Upload the SVG and read how the stored object is served back",
+    "content-type image/svg+xml, inline, same origin, no CSP on that path => the document is a script host",
+    "Processing-instruction route lives entirely in the uploaded bytes",
+    "Link-header route needs a header-injection or CDN-rule primitive on the same host"
+   ],
+   "impact_proof": "Stored XSS same-origin; a Safari-only route is still a finding at one-browser severity, with browser and version recorded",
+   "keywords": [
+    "xml-stylesheet processing instruction",
+    "xslt stylesheet is a program",
+    "scalable vector grief",
+    "data:text/xml"
+   ],
+   "lesson": "the sanitiser's allowlist is not the document's full grammar",
+   "landed_in": "skills/hunt-file-upload/SKILL.md (SVG that comes back to life)",
+   "source_url": null,
+   "ref_url": "https://portswigger.net/research/scalable-vector-grief"
+  },
+  {
+   "id": "td13-04",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "dom",
+    "xss"
+   ],
+   "first_signal": "A markup injection that survives the sanitiser but executes no script, on a page that takes a credential",
+   "mechanic": "`form-action` has no fallback to `default-src`, so a strict `script-src` policy can leave the form boundary open. `formaction` on an existing submit button, or an injected `<form>` tag before the real inputs (HTML does not nest forms), retargets the page's own inputs and the password manager's autofill. Where `form-action 'self'` holds, a GET form puts the credential in the URL and it leaves in the `Referer` of the landing page's off-origin subresources.",
+   "chain": [
+    "Read the live CSP and decide on the presence of form-action, not the policy's strictness",
+    "formaction on an existing button, or an earlier form tag, captures the real inputs",
+    "form-action 'self' => GET form plus a landing page that loads a third-party resource",
+    "referrer-policy no-referrer / same-origin kills the Referer route"
+   ],
+   "impact_proof": "The operator's own credential arriving at the operator's own collector from the operator's own browser, with the required interaction (one click, or an autofill) stated",
+   "keywords": [
+    "form-action no fallback",
+    "formaction attribute button",
+    "autofill"
+   ],
+   "lesson": "a CSP that stops every script can still leave the form boundary open",
+   "landed_in": "skills/hunt-dom/SKILL.md (Phase 7)",
+   "source_url": null
+  },
+  {
+   "id": "td13-05",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "dom",
+    "info-leak"
+   ],
+   "first_signal": "A confirmed CSS injection whose target secret is longer than the prefix ladder can walk",
+   "mechanic": "Prefix leaking with `value^=` is linear and runs out on a long token. Firing `value*=` (contains) selectors for a fixed-width window yields unordered overlapping chunks, which reassemble into the secret by overlap rather than by arrival order — the reassembly, not the request count, recovers a 210-640 character value.",
+   "chain": [
+    "Confirm the CSS injection and the OOB channel first",
+    "Pick the window width from the alphabet (wider for base64url, narrower for hex)",
+    "Collect every hit, keep duplicates",
+    "Stitch by unique overlap; a repeated window leaves a branch"
+   ],
+   "impact_proof": "OOB hits forming the real token, then that token used in a state-changing request",
+   "keywords": [
+    "window width alphabet",
+    "base64url window",
+    "sequence assembler",
+    "unordered substring",
+    "repeated window branch"
+   ],
+   "lesson": "an exfil that runs out of rounds is a reassembly problem, not a bandwidth problem",
+   "landed_in": "skills/hunt-dom/SKILL.md (Phase 4, past the prefix limit)",
+   "source_url": null,
+   "ref_url": "https://portswigger.net/research/smashing-the-token-limit"
+  },
+  {
+   "id": "td13-06",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "cspt",
+    "postmessage"
+   ],
+   "first_signal": "A `fetch()` path built by concatenation whose input does not come from the URL at all",
+   "mechanic": "The same unencoded path concatenation reached from two other sources: a `message` listener's `event.data` (no URL parameter has to exist; needs a framing or opener channel), and a server-stored field — slug, filename, display name — that the SPA later concatenates, which makes the traversal zero-click for its owner and self-propagating where the traversed gadget writes the same field for other accounts.",
+   "chain": [
+    "Census the listeners by hooking addEventListener before boot, not by grepping a minified bundle",
+    "Read frame-ancestors / X-Frame-Options to decide framing vs window.open",
+    "For the stored source: write a marker that is legal for the field but contains the separator, then read it back",
+    "Propagation to other accounts: approval-gated, keep the PoC to one account"
+   ],
+   "impact_proof": "A same-origin authenticated request landing on an endpoint the attacker chose, with the victim doing nothing but opening their own page",
+   "keywords": [
+    "self-propagating stored",
+    "addeventlistener census",
+    "opener channel",
+    "hook addeventlistener before boot"
+   ],
+   "lesson": "the source census is cheaper than the payload",
+   "landed_in": "skills/hunt-cspt/SKILL.md (source census)",
+   "source_url": null,
+   "ref_url": "https://blog.doyensec.com/2024/07/02/cspt2csrf.html"
+  },
+  {
+   "id": "td13-07",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "cache-poison",
+    "oauth",
+    "ato"
+   ],
+   "first_signal": "`/oauth/authorize` answering with a 302 whose Location carries `code=`, no `cache-control: no-store`, no `vary: cookie`, and an edge header on the response",
+   "mechanic": "The authorization endpoint's redirect carries a credential in its Location. An edge keyed on path and query, with the session cookie unkeyed, stores it — so the identical URL requested with no cookie returns the victim's authorization code. Reported against TikTok at DEF CON 34 per the operator digest. Variants: a `state` not bound to the session makes the stolen code redeemable, and a path-confusing sibling (`/authorize/x.css`) brings the deception family to the authorization endpoint.",
+   "chain": [
+    "Location carries code= or #access_token=",
+    "cache-control allows storage (no no-store / private)",
+    "vary does not include cookie",
+    "An edge is in front (age / x-cache / cf-cache-status)",
+    "Jarless re-request of the IDENTICAL url returns a code minted by the other identity",
+    "Callback accepts that code with state absent or state from another session"
+   ],
+   "impact_proof": "A cookie-less request returning an authorization code the operator's other identity minted, then a session established with it — zero-click past the victim's own normal login. Never against a session that is not the operator's own.",
+   "keywords": [
+    "jarless",
+    "no cache-buster parameter",
+    "minted by identity a"
+   ],
+   "lesson": "the cached object can be a credential, not a page",
+   "landed_in": "skills/hunt-cache-poison/SKILL.md + skills/hunt-oauth/SKILL.md",
+   "source_url": null
+  },
+  {
+   "id": "td13-08",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "header-injection",
+    "request-smuggling"
+   ],
+   "first_signal": "Input reflected into a header the front end then sends ONWARD, not merely into the response the client reads",
+   "mechanic": "A CRLF into an upstream header lets the attacker start a second message the next hop parses. The ladder: injection into an upstream header, then a header-COUNT increase proving the line landed as a real header, then a controlled split response with a Location of the attacker's choosing, then — on a shared connection — that response landing on another user's request.",
+   "chain": [
+    "Rung 1: the injection is into a header the front end forwards",
+    "Rung 2: compare the response's header name count against a clean request; an echoed marker inside a value is not a split",
+    "Rung 3: two requests on one keep-alive connection, the second clean, and the clean one gets the injected response",
+    "Rung 4 (cross-user redirect): do not fire; blocked-tests plus cbh queue"
+   ],
+   "impact_proof": "Rungs 1-3 on the operator's own connection are already a report; rung 4 is written as the demonstrated-but-not-fired consequence",
+   "keywords": [
+    "impact ladder",
+    "rung",
+    "header-count increase"
+   ],
+   "lesson": "the rung you stop on is the severity",
+   "landed_in": "skills/hunt-header-injection/SKILL.md (CRLF impact ladder)",
+   "source_url": null,
+   "ref_url": "https://portswigger.net/research/crlf-powered-desync-attacks"
+  },
+  {
+   "id": "td13-09",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "request-smuggling",
+    "parser-differential"
+   ],
+   "first_signal": "A request that is well-formed to BOTH hops: no 400, no deadlock, no header masking, and still a response-queue offset",
+   "mechanic": "Two hops sharing a parser family but not its version can both compute a matching Content-Length for the same body (dual-matching) while one byte is left dangling in the connection buffer. Every mystery-400 and header-masking detector stays quiet; the response queue is off by one, so a response answers the previous request.",
+   "chain": [
+    "Detect on your own connection only: candidate, then a distinctive clean request on the same connection",
+    "Oracle is an unasked-for response, not a timing delta",
+    "An offset surviving Connection: close, or on a connection you did not open, is the SHARED pool — stop",
+    "Weaponisation reads another user's response: written approval or not at all"
+   ],
+   "impact_proof": "The queue offset itself, captured on the operator's own connection, is the finding; nothing is read from another user",
+   "keywords": [
+    "dual-matching content-length",
+    "dangling byte",
+    "response-queue offset"
+   ],
+   "lesson": "a detector tuned for malformed requests misses the well-formed one",
+   "landed_in": "skills/hunt-http-smuggling/SKILL.md (detection-only, approval-gated)",
+   "source_url": null
+  },
+  {
+   "id": "td13-10",
+   "set": "research",
+   "severity": "high",
+   "bounty": null,
+   "classes": [
+    "auth-bypass",
+    "oauth"
+   ],
+   "first_signal": "`better-auth` or `expo-auth-session` in the bundle, `/api/auth/*` routes, a `better-auth.session_token` cookie shaped `<opaque>.<signature>`",
+   "mechanic": "Reported as a signing oracle: the social-login `state` is accepted without checking which issuer minted it, and the session cookie is a signed compact value trusted on its signature alone — a forged token is a session with no database row behind it.",
+   "chain": [
+    "Fingerprint the library and the route shape (unauthenticated reads)",
+    "Read the version against the advisory range",
+    "Forgery only against the operator's own account, only on a covered version"
+   ],
+   "impact_proof": "A session accepted for a token the server never issued; outside the advisory range this is a guess at a secret and is not fired here",
+   "keywords": [
+    "better-auth.session_token",
+    "signing oracle",
+    "expo-auth-session",
+    "api/auth/get-session"
+   ],
+   "lesson": "a fingerprint row costs one read and decides the lane",
+   "landed_in": "skills/hunt-auth-bypass/SKILL.md (fingerprint row)",
+   "source_url": null
+  }
+ ]
+}

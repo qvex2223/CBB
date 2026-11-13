@@ -1,0 +1,597 @@
+#!/usr/bin/env python3
+"""
+bbscan — sqlmap and nmap, with the engagement's scope gate, pacing budget,
+mandatory headers and audit trail applied.
+
+Both tools build and send their own traffic, so `bbcurl` cannot cover them:
+installing them (2026-10-29) added two transports that bypassed every guarantee
+the rest of this workspace enforces in code. This wrapper closes that gap the
+same way `bbcurl` closed it for curl, and reuses the same broker, so there is
+one policy and not three.
+
+Before exec'ing the real binary it:
+
+  1. resolves the engagement ($CBH_PROJECT, else cwd under Targets/<name>/),
+  2. scope-checks every target via engine/scope.py — deny wins, default deny,
+     DNS-resolution gate for netblock programmes; a CIDR is expanded locally and
+     EVERY address must pass,
+  3. waits out the engagement's global flock'd pacing budget once, and then
+     translates that budget into the tool's own throttle flags so the whole run
+     stays inside it (sqlmap --delay/--threads, nmap --scan-delay/--max-rate),
+  4. injects the programme's mandatory headers (sqlmap only; nmap has none),
+  5. refuses the switches that write to the target, read other users' data,
+     hold connections open, or defeat the pacing budget, unless an approval
+     file exists under the engagement,
+  6. appends the run to hunt-memory/audit.jsonl.
+
+`nsupdate` and `snmp` are not passthroughs. bbscan BUILDS their request itself,
+because for both the safeguard used to be a sentence in settings.local.json rather
+than a mechanism (2026-10-29):
+
+  nsupdate  bbscan writes the whole update script and it contains NO update
+            section — only `prereq`, so the RCODE answers "are dynamic updates
+            authorized here" and altering a record is impossible by construction.
+            Arbitrary nsupdate input is refused, not forwarded.
+  snmp      a v2c GET implemented in-process (there is no net-snmp client on this
+            box), restricted to the default communities. A non-default community
+            is credential guessing, so it is refused.
+
+Usage:
+    CBH_PROJECT=<eng> bbscan sqlmap -u 'https://host/a?id=1'
+    CBH_PROJECT=<eng> bbscan nmap -p 443,8080,8089 185.171.101.250
+    CBH_PROJECT=<eng> bbscan nsupdate 185.171.101.250 --zone ykky.ru
+    CBH_PROJECT=<eng> bbscan snmp 185.171.101.250
+    CBH_PROJECT=<eng> bbscan --bb-dry-run sqlmap -u '...'
+
+Exit codes: 2 = blocked by policy, 3 = no engagement resolved (nothing sent).
+"""
+from __future__ import annotations
+
+import argparse
+import ipaddress
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ENGINE = Path(__file__).resolve().parent.parent / "engine"
+sys.path.insert(0, str(ENGINE))
+
+from pacing import MissingRequiredHeader  # noqa: E402
+from request_broker import RequestBroker, RequestBlocked  # noqa: E402
+from scope import _scope_from_md  # noqa: E402
+import responses  # noqa: E402
+
+TOOLS = ("sqlmap", "nmap", "nsupdate", "snmp")
+URL_RE = re.compile(r"https?://[^\s'\"\\]+")
+MAX_CIDR_HOSTS = 1024
+
+# nmap options that consume the next argv item, so it is a value and not a target.
+NMAP_VALUE_OPTS = {
+    "-p", "-oN", "-oX", "-oG", "-oA", "-oS", "-iL", "-e", "-b", "-g", "-S", "-D",
+    "--script", "--script-args", "--script-args-file", "--max-rate", "--min-rate",
+    "--scan-delay", "--max-scan-delay", "--host-timeout", "--max-retries",
+    "--top-ports", "--port-ratio", "--exclude", "--excludefile", "--data-length",
+    "--ttl", "--source-port", "--proxies", "--dns-servers", "--spoof-mac",
+    "--min-parallelism", "--max-parallelism", "--min-hostgroup", "--max-hostgroup",
+    "--version-intensity", "--initial-rtt-timeout", "--min-rtt-timeout",
+    "--max-rtt-timeout", "--stylesheet", "--datadir", "--resume",
+}
+
+# Needs an approval file under the engagement. Deliberately short: the operator holds
+# the engagements' authorization, so throughput, technique choice, scan type and
+# evasion are their call and are NOT gated here (2026-10-29 operator instruction).
+# What stays is what reaches past the operator's own authority — somebody else's data,
+# a write to production, code execution, or availability. A programme's permission to
+# test is not a third party's permission to have their row read.
+GATED_SQLMAP = [
+    (lambda a: a.startswith(("--os-shell", "--os-pwn", "--os-cmd", "--os-bof", "--priv-esc")),
+     "code execution on the target"),
+    (lambda a: a.startswith(("--file-write", "--file-dest")),
+     "writes a file to the target host"),
+    (lambda a: a.startswith(("--sql-shell", "--sql-query")),
+     "arbitrary SQL against a live database"),
+    (lambda a: a.startswith(("--dump", "--passwords", "--users", "--privileges", "--all")),
+     "reads stored rows, i.e. other users' data"),
+]
+GATED_NMAP: list = []
+# vuln/intrusive detection scripts are ungated: they fingerprint, they do not attack.
+NSE_FORBIDDEN = re.compile(r"\b(exploit|dos|brute|malware)\b", re.I)
+
+
+def die(msg: str, code: int = 2) -> int:
+    print(f"bbscan: {msg}", file=sys.stderr)
+    return code
+
+
+def split_args(argv: list[str]) -> tuple[str, list[str], bool, str, bool]:
+    """-> (tool, tool_argv, dry_run, approval_path, ungated)"""
+    dry_run = False
+    approval = ""
+    ungated = False
+    rest: list[str] = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--bb-dry-run":
+            dry_run = True
+        elif a == "--bb-ungated":
+            ungated = True
+        elif a == "--bb-approved":
+            i += 1
+            approval = argv[i] if i < len(argv) else ""
+        elif a.startswith("--bb-approved="):
+            approval = a.split("=", 1)[1]
+        else:
+            rest.append(a)
+        i += 1
+    tool = rest[0] if rest else ""
+    return tool, rest[1:], dry_run, approval, ungated
+
+
+def sqlmap_targets(argv: list[str]) -> tuple[list[str], list[str]]:
+    """-> (targets, hard_errors)"""
+    targets = list(dict.fromkeys(URL_RE.findall(" ".join(argv))))
+    errs: list[str] = []
+    for i, a in enumerate(argv):
+        if a in {"-g", "--google-dork"} or a.startswith("--google-dork"):
+            errs.append("-g/--google-dork picks targets off a search engine, so no scope "
+                        "gate can vouch for them")
+        if a in {"-m"} or a.startswith("--bulkfile"):
+            path = argv[i + 1] if a == "-m" and i + 1 < len(argv) else a.split("=", 1)[-1]
+            try:
+                for line in Path(path).read_text(encoding="utf-8").split():
+                    if line.strip():
+                        targets.append(line.strip())
+            except OSError as e:
+                errs.append(f"cannot read target list {path}: {e}")
+        if a == "-r" or a.startswith("--requestfile"):
+            path = argv[i + 1] if a == "-r" and i + 1 < len(argv) else a.split("=", 1)[-1]
+            try:
+                text = Path(path).read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                errs.append(f"cannot read request file {path}: {e}")
+                continue
+            host = ""
+            for line in text.splitlines():
+                if line.lower().startswith("host:"):
+                    host = line.split(":", 1)[1].strip()
+                    break
+            if host:
+                targets.append("https://" + host)
+            else:
+                errs.append(f"{path} carries no Host: header, so its target cannot be "
+                            "scope-checked")
+    return list(dict.fromkeys(targets)), errs
+
+
+def nmap_targets(argv: list[str]) -> tuple[list[str], list[str]]:
+    raw: list[str] = []
+    skip = False
+    for a in argv:
+        if skip:
+            skip = False
+            continue
+        if a in NMAP_VALUE_OPTS:
+            skip = True
+            continue
+        if a.startswith("-"):
+            continue
+        raw.append(a)
+    targets: list[str] = []
+    errs: list[str] = []
+    for t in raw:
+        if "*" in t or re.search(r"\d-\d", t):
+            errs.append(f"{t!r}: octet range/wildcard syntax cannot be scope-checked per "
+                        "address — expand it first (`mapcidr -cidr <range>`) and pass "
+                        "explicit addresses or a CIDR")
+            continue
+        if "/" in t:
+            try:
+                net = ipaddress.ip_network(t, strict=False)
+            except ValueError as e:
+                errs.append(f"{t!r}: {e}")
+                continue
+            hosts = list(net.hosts()) or [net.network_address]
+            if len(hosts) > MAX_CIDR_HOSTS:
+                errs.append(f"{t} expands to {len(hosts)} addresses (cap {MAX_CIDR_HOSTS}) — "
+                            "narrow the range")
+                continue
+            targets += [str(h) for h in hosts]
+        else:
+            targets.append(t)
+    return list(dict.fromkeys(targets)), errs
+
+
+
+# ---------------------------------------------------------------------------
+# nsupdate — prerequisite-only, by construction
+# ---------------------------------------------------------------------------
+UPDATE_VERB = re.compile(r"^\s*(update|add|delete|del)\b", re.I | re.M)
+
+
+def nsupdate_plan(argv: list[str]) -> tuple[dict, list[str]]:
+    """-> (plan, errors). bbscan writes the script; the caller cannot."""
+    ap = argparse.ArgumentParser(prog="bbscan nsupdate", add_help=False)
+    ap.add_argument("server", nargs="?", default="")
+    ap.add_argument("--zone", default="")
+    ap.add_argument("--name", default="")
+    ap.add_argument("--tcp", action="store_true",
+                    help="nsupdate -v; TCP/53 is filtered on some targets and then this hangs")
+    ap.add_argument("--timeout", type=int, default=10)
+    try:
+        a, unknown = ap.parse_known_args(argv)
+    except SystemExit:
+        return {}, ["could not parse the nsupdate arguments"]
+    errs = []
+    if unknown:
+        errs.append("bbscan builds the nsupdate script itself, so these are refused: "
+                    + " ".join(unknown)
+                    + "\n    Only --zone, --name, --tcp and --timeout are accepted. This is what "
+                      "makes\n    'no record can be altered' a property of the code and not a "
+                      "promise in prose.")
+    if not a.server:
+        errs.append("give the authoritative name server's in-scope address")
+    if not a.zone:
+        errs.append("--zone <zone> is required (the zone whose update policy is being asked about)")
+    name = a.name or f"bbscan-probe-{os.getpid()}.{a.zone}"
+    # prereq only. No update/add/delete line is ever emitted.
+    script = (f"server {a.server} 53\n"
+              f"zone {a.zone}.\n"
+              f"prereq nxdomain {name.rstrip('.')}.\n"
+              f"send\n")
+    assert not UPDATE_VERB.search(script), "refusing: the built script carries an update verb"
+    return {"server": a.server, "zone": a.zone, "name": name, "script": script,
+            "argv": (["-v"] if a.tcp else []) + ["-t", str(a.timeout)],
+            "timeout": a.timeout}, errs
+
+
+# ---------------------------------------------------------------------------
+# SNMP v2c GET, in-process (no net-snmp client on this box)
+# ---------------------------------------------------------------------------
+DEFAULT_COMMUNITIES = ("public", "private")
+SYS_DESCR = "1.3.6.1.2.1.1.1.0"
+
+
+def _ber_len(n: int) -> bytes:
+    if n < 0x80:
+        return bytes([n])
+    body = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([0x80 | len(body)]) + body
+
+
+def _tlv(tag: int, body: bytes) -> bytes:
+    return bytes([tag]) + _ber_len(len(body)) + body
+
+
+def _ber_int(v: int) -> bytes:
+    n = max(1, (v.bit_length() + 8) // 8)
+    return _tlv(0x02, v.to_bytes(n, "big", signed=True))
+
+
+def _ber_oid(oid: str) -> bytes:
+    parts = [int(x) for x in oid.split(".")]
+    out = bytearray([40 * parts[0] + parts[1]])
+    for p in parts[2:]:
+        chunk = [p & 0x7F]
+        p >>= 7
+        while p:
+            chunk.append(0x80 | (p & 0x7F))
+            p >>= 7
+        out += bytes(reversed(chunk))
+    return _tlv(0x06, bytes(out))
+
+
+def snmp_packet(community: str, oid: str, request_id: int) -> bytes:
+    varbind = _tlv(0x30, _tlv(0x30, _ber_oid(oid) + _tlv(0x05, b"")))
+    pdu = _tlv(0xA0, _ber_int(request_id) + _ber_int(0) + _ber_int(0) + varbind)
+    return _tlv(0x30, _ber_int(1) + _tlv(0x04, community.encode()) + pdu)   # version 1 = v2c
+
+
+def snmp_get(addr: str, community: str, oid: str = SYS_DESCR,
+             timeout: float = 3.0, port: int = 161) -> dict:
+    """One UDP GET. A silent socket is its OWN bucket, never a hit.
+
+    `udp-oracle-no-response-is-its-own-bucket`: treating "not an error" as "a hit"
+    turns dropped packets into discoveries. This returns state explicitly.
+    """
+    import socket
+    pkt = snmp_packet(community, oid, request_id=os.getpid() & 0x7FFF)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        sock.sendto(pkt, (addr, port))
+        data, _ = sock.recvfrom(4096)
+    except socket.timeout:
+        return {"state": "no-response", "community": community, "bytes": 0, "value": None}
+    except OSError as e:
+        return {"state": f"error: {e}", "community": community, "bytes": 0, "value": None}
+    finally:
+        sock.close()
+    printable = re.findall(rb"[\x20-\x7e]{4,}", data)
+    return {"state": "response", "community": community, "bytes": len(data),
+            "value": (printable[-1].decode("ascii", "replace") if printable else None)}
+
+
+def snmp_plan(argv: list[str]) -> tuple[dict, list[str]]:
+    ap = argparse.ArgumentParser(prog="bbscan snmp", add_help=False)
+    ap.add_argument("address", nargs="?", default="")
+    ap.add_argument("--community", default=",".join(DEFAULT_COMMUNITIES))
+    ap.add_argument("--oid", default=SYS_DESCR)
+    ap.add_argument("--timeout", type=float, default=3.0)
+    try:
+        a, unknown = ap.parse_known_args(argv)
+    except SystemExit:
+        return {}, ["could not parse the snmp arguments"]
+    errs = []
+    if unknown:
+        errs.append("unknown argument(s): " + " ".join(unknown))
+    if not a.address:
+        errs.append("give one in-scope address")
+    communities = [c.strip() for c in a.community.split(",") if c.strip()]
+    nondefault = [c for c in communities if c not in DEFAULT_COMMUNITIES]
+    if nondefault:
+        errs.append(f"non-default community string(s) {nondefault}: guessing a secret is "
+                    "credential brute force, not a default-credential check. Only "
+                    f"{'/'.join(DEFAULT_COMMUNITIES)} are allowed here.")
+    return {"address": a.address, "communities": communities, "oid": a.oid,
+            "timeout": a.timeout}, errs
+
+def check_gated(tool: str, argv: list[str], approval: str,
+                project_dir: Path) -> list[str]:
+    table = GATED_SQLMAP if tool == "sqlmap" else GATED_NMAP
+    hits: list[tuple[str, str]] = []
+    for a in argv:
+        for matcher, why in table:
+            if matcher(a):
+                hits.append((a, why))
+    if tool == "sqlmap":
+        for a in argv:
+            # --level and --technique=T are throughput and technique choices: the
+            # engagement's pacing budget still bounds every request, so they are the
+            # operator's call. risk>1 and stacked queries are not: both WRITE.
+            m = re.match(r"--risk[= ]?(\d+)", a)
+            if m and int(m.group(1)) > 1:
+                hits.append((a, "risk > 1 sends UPDATE/stacked-query payloads, i.e. it writes "
+                                "to the target's database"))
+            if re.match(r"--technique[= ]?", a) and "S" in a.split("=", 1)[-1]:
+                hits.append((a, "stacked queries execute a second statement, i.e. they write"))
+    if tool == "nmap":
+        for i, a in enumerate(argv):
+            val = a.split("=", 1)[1] if "=" in a else (argv[i + 1] if a == "--script"
+                                                       and i + 1 < len(argv) else "")
+            if a.startswith("--script") and NSE_FORBIDDEN.search(val):
+                hits.append((a, f"NSE category in {val!r} exploits, brute-forces credentials "
+                                "or degrades availability"))
+    if not hits:
+        return []
+    ok = False
+    if approval:
+        p = Path(approval)
+        if not p.is_absolute():
+            p = project_dir / approval
+        ok = p.is_file()
+    if ok:
+        return []
+    lines = [f"BLOCKED — {len(hits)} switch(es) reach past the operator's own authorization:"]
+    for a, why in dict(hits).items():
+        lines.append(f"    {a}  —  {why}")
+    lines.append("")
+    lines.append("Throughput, technique, scan type and evasion are NOT gated — those are the")
+    lines.append("operator's call. This short list is what a permission to test cannot cover,")
+    lines.append("because the party it affects is not the operator: another user's stored rows,")
+    lines.append("a write to production data, code execution, or availability.")
+    lines.append("With the programme's approval on disk, pass it and these clear:")
+    lines.append(f"    {project_dir}/approvals/<file>.md")
+    lines.append("    --bb-approved approvals/<file>.md   (the path is audited)")
+    return lines
+
+
+def pace_flags(tool: str, argv: list[str], interval: float) -> list[str]:
+    """Translate the engagement budget into the tool's own throttle flags."""
+    if interval <= 0:
+        return []
+    joined = " ".join(argv)
+    out: list[str] = []
+    if tool == "sqlmap":
+        if "--delay" not in joined:
+            out.append(f"--delay={interval}")
+        if "--threads" not in joined:
+            out.append("--threads=1")
+        if "--batch" not in joined:
+            out.append("--batch")
+    else:
+        if "--scan-delay" not in joined:
+            out.append(f"--scan-delay={interval}s")
+        if "--max-rate" not in joined:
+            out.append(f"--max-rate={max(0.1, 1.0 / interval):.3f}")
+        if "--max-parallelism" not in joined:
+            out += ["--max-parallelism", "1"]
+    return out
+
+
+
+def run_built_probe(tool, targv, broker, eng, scope_md, dry_run) -> int:
+    """nsupdate and snmp: bbscan builds the request, so the limits are structural."""
+    plan, errs = (nsupdate_plan(targv) if tool == "nsupdate" else snmp_plan(targv))
+    if errs:
+        for e in errs:
+            print(f"bbscan: {e}", file=sys.stderr)
+        return die("refusing. Nothing sent.")
+
+    target = plan["server"] if tool == "nsupdate" else plan["address"]
+    broker.scope = _scope_from_md(str(scope_md))
+    url = target if "://" in target else "http://" + target
+    try:
+        broker.validate([url])
+    except RequestBlocked as e:
+        print(f"bbscan: {e}", file=sys.stderr)
+        return die("refusing to send. No packet made.")
+
+    if tool == "nsupdate":
+        cmd = ["nsupdate", *plan["argv"]]
+        if dry_run:
+            print(f"engagement: {eng.name}  pacing={eng.min_interval}s")
+            print("scope: IN-SCOPE", target)
+            print("would run:", " ".join(cmd), "with this script on stdin:")
+            print("".join("    " + ln + "\n" for ln in plan["script"].splitlines()))
+            print("note: no update/add/delete line — the RCODE is the whole answer")
+            return 0
+        broker.wait_turn()
+        proc = subprocess.run(cmd, input=plan["script"], text=True,
+                              capture_output=True, timeout=plan["timeout"] + 10)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        print(out, end="" if out.endswith("\n") else "\n")
+        rcode = ""
+        m = re.search(r"status:\s*(\w+)", out)
+        if m:
+            rcode = m.group(1)
+            print(f"bbscan: RCODE {rcode} — REFUSED/NOTAUTH means updates are not authorized; "
+                  "NOERROR/NXRRSET/YXDOMAIN means the server processed an UPDATE opcode from you.",
+                  file=sys.stderr)
+        elif proc.returncode != 0:
+            print("bbscan: no RCODE in the answer. A timeout is its own bucket, not a negative — "
+                  "TCP/53 is filtered on some targets, so retry without --tcp (or with it).",
+                  file=sys.stderr)
+        try:
+            broker.audit({"source": "bbscan", "tool": "nsupdate", "engagement": eng.name,
+                          "urls": [url], "targets": 1, "exit_code": proc.returncode,
+                          "pacing_s": eng.min_interval, "zone": plan["zone"],
+                          "rcode": rcode, "prereq_only": True})
+        except Exception:  # noqa: BLE001
+            pass
+        return proc.returncode
+
+    # snmp
+    if dry_run:
+        print(f"engagement: {eng.name}  pacing={eng.min_interval}s")
+        print("scope: IN-SCOPE", target)
+        print(f"would send {len(plan['communities'])} SNMPv2c GET(s) for {plan['oid']} "
+              f"to {target}:161 with community {'/'.join(plan['communities'])}")
+        return 0
+    rc = 1
+    for community in plan["communities"]:
+        broker.wait_turn()
+        res = snmp_get(target, community, plan["oid"], plan["timeout"])
+        state = res["state"]
+        print(f"{target}  community={community:<8} {state}"
+              + (f"  {res['bytes']}B  {res['value']!r}" if res["value"] else ""))
+        if state == "response":
+            rc = 0
+        try:
+            broker.audit({"source": "bbscan", "tool": "snmp", "engagement": eng.name,
+                          "urls": [url], "targets": 1, "pacing_s": eng.min_interval,
+                          "community": community, "oid": plan["oid"],
+                          "state": state, "bytes": res["bytes"]})
+        except Exception:  # noqa: BLE001
+            pass
+    if rc:
+        print("bbscan: no community answered. A silent UDP socket is not proof of absence — "
+              "it is a dropped packet until a control says otherwise.", file=sys.stderr)
+    return rc
+
+
+def main(argv: list[str]) -> int:
+    tool, targv, dry_run, approval, ungated = split_args(argv)
+    if tool not in TOOLS:
+        return die(f"first argument must be one of {', '.join(TOOLS)} (got {tool!r})\n"
+                   "  usage: CBH_PROJECT=<eng> bbscan sqlmap -u '<url>'\n"
+                   "         CBH_PROJECT=<eng> bbscan nmap -p 443 <addr>\n"
+                   "         CBH_PROJECT=<eng> bbscan nsupdate <ns-addr> --zone <zone>\n"
+                   "         CBH_PROJECT=<eng> bbscan snmp <addr>")
+    if tool != "snmp" and not shutil.which(tool):
+        return die(f"{tool} is not on PATH"
+                   + ("\n  nsupdate ships with bind9-dnsutils: sudo apt-get install -y "
+                      "bind9-dnsutils" if tool == "nsupdate" else ""))
+
+    broker = RequestBroker.detect(source="bbscan")
+    eng = broker.engagement
+    if eng.project_dir is None:
+        named = os.environ.get("CBH_PROJECT")
+        why = (f"$CBH_PROJECT={named!r} does not resolve to an engagement"
+               if named else "cwd is not inside Targets/<name>/ and $CBH_PROJECT is unset")
+        if ungated:
+            print(f"bbscan: --bb-ungated with no engagement ({why}) — no scope gate, no "
+                  f"pacing, no audit. Running plain {tool}.", file=sys.stderr)
+            return 0 if dry_run else subprocess.call([tool, *targv])
+        return die(f"REFUSING — no engagement resolved ({why}), so there is no scope gate, "
+                   f"no pacing and no audit trail for this {tool} run.\nFix one of:\n"
+                   "  CBH_PROJECT=<name> bbscan ...   (<name> may be nested, e.g. "
+                   "standoff365/yukki)\n"
+                   "  cd /path/to/Targets/<name> && bbscan ...\n"
+                   "This exits 3 and sends nothing.", 3)
+
+    scope_md = eng.project_dir / "scope.md"
+    if not scope_md.is_file():
+        return die(f"{scope_md} not found — refusing to fire blind for '{eng.name}'.")
+
+    if tool in ("nsupdate", "snmp"):
+        return run_built_probe(tool, targv, broker, eng, scope_md, dry_run)
+
+    targets, errs = (sqlmap_targets(targv) if tool == "sqlmap" else nmap_targets(targv))
+    if errs:
+        for e in errs:
+            print(f"bbscan: {e}", file=sys.stderr)
+        return die("refusing — at least one target cannot be scope-checked. Nothing sent.")
+    if not targets:
+        return die(f"no target found on the {tool} command line (sqlmap: -u/-m/-r, "
+                   "nmap: a positional address). Nothing sent.")
+
+    gate = check_gated(tool, targv, approval, eng.project_dir)
+    if gate:
+        print("\n".join("bbscan: " + ln if i == 0 else ln for i, ln in enumerate(gate)),
+              file=sys.stderr)
+        return 2
+
+    broker.scope = _scope_from_md(str(scope_md))
+    urls = [t if "://" in t else "http://" + t for t in targets]
+    try:
+        broker.validate(urls)
+    except RequestBlocked as e:
+        print(f"bbscan: {e}", file=sys.stderr)
+        return die("refusing to send. No packet made.")
+
+    header_args: list[str] = []
+    try:
+        required = broker.prepare_headers({})
+    except MissingRequiredHeader as e:
+        return die(f"BLOCKED  {e}")
+    if tool == "sqlmap":
+        joined = " ".join(targv)
+        for key, value in required.items():
+            if re.search(r"(^|\s)(-H|--header[= ])\S*" + re.escape(key), joined, re.I):
+                continue
+            header_args += ["-H", f"{key}: {value}"]
+    elif required:
+        print(f"bbscan: NOTE {eng.name} mandates {', '.join(required)} on every request; "
+              "nmap cannot carry an HTTP header, so this run is anonymous to the "
+              "programme. Use it for service discovery only and do the HTTP work "
+              "through bbcurl.", file=sys.stderr)
+
+    throttle = pace_flags(tool, targv, eng.min_interval)
+    # throttle LAST: nmap and sqlmap both let a later option win, so an explicit
+    # --max-rate/--delay still bounds the run when the caller passed -T4 or -T5.
+    cmd = [tool, *header_args, *targv, *throttle]
+
+    if dry_run:
+        print(f"engagement: {eng.name}  pacing={eng.min_interval}s  targets={len(targets)}")
+        print("scope: all targets IN-SCOPE")
+        print("would run:", " ".join(cmd))
+        return 0
+
+    broker.wait_turn()
+    rc = subprocess.call(cmd)
+    try:
+        broker.audit({"source": "bbscan", "tool": tool, "engagement": eng.name,
+                      "urls": urls, "targets": len(targets), "exit_code": rc,
+                      "pacing_s": eng.min_interval, "approval": approval or None,
+                      "req": responses.redact([tool, *throttle, *targv])})
+    except Exception:  # noqa: BLE001
+        pass
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

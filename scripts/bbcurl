@@ -1,0 +1,560 @@
+#!/usr/bin/env python3
+"""
+bbcurl — curl, with the engagement's scope gate, pacing budget and mandatory
+headers applied automatically.
+
+This workspace is curl-first: most requests never go through poc_runtime.py, so
+gating only that script left the dominant path ungated. `bbcurl` closes that
+gap. It takes the same arguments as `curl`, and before exec'ing it:
+
+  1. resolves which engagement the cwd belongs to (Targets/<name>/),
+  2. scope-checks every URL on the command line via engine/scope.py — deny wins,
+     default deny, and the DNS-resolution gate for netblock-scoped programs,
+  3. waits out the engagement's global rate budget (engine/pacing.py),
+  4. injects any header the program mandates on every request,
+  5. appends the request to hunt-memory/audit.jsonl, and keeps the response body
+     itself in hunt-memory/responses/<engagement>/<sha256>.txt (headers included),
+     so "did that change anything?" is a hash comparison and a PoC spec can be
+     generated from a request that already flew (`cbh diff`, `cbh spec`).
+     Opt out per request with --bb-no-store, globally with CBH_NO_RESPONSE_STORE=1.
+
+The point is not ceremony. It is that once the rules are enforced here, they no
+longer have to be carried as prose the agent second-guesses before every probe —
+so the honest answer to "is it safe to send this?" becomes "bbcurl will refuse
+if it isn't."
+
+Usage:
+    bbcurl -s https://target.example.com/api/v1/users/124
+    bbcurl -X POST -d '{}' https://target.example.com/api/orders
+    bbcurl --bb-dry-run https://... # show what would happen, send nothing
+
+Outside a Targets/<name>/ folder it degrades to plain curl with a warning
+rather than blocking — lab and localhost work stays frictionless.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import pathlib
+import sys
+import tempfile
+import time
+import urllib.parse
+from pathlib import Path
+
+ENGINE = Path(__file__).resolve().parent.parent / "engine"
+sys.path.insert(0, str(ENGINE))
+
+import responses  # noqa: E402
+from pacing import Engagement, MissingRequiredHeader, ThrottledHost  # noqa: E402
+from request_broker import RequestBroker, RequestBlocked, is_local_url  # noqa: E402
+from scope import _scope_from_md  # noqa: E402
+
+URL_PREFIXES = ("http://", "https://")
+
+
+def extract_pins(argv: list[str]) -> dict[str, str]:
+    """Map hostname -> IP for every `--resolve host:port:ip` on the command line.
+
+    curl's `--resolve` pins the connection to that IP and sends the hostname as
+    SNI, which is exactly how you reach a name-gated vhost on a netblock-scoped
+    programme: the *target* is the pinned in-scope address, the name is request
+    content. Without this the gate resolves the name in DNS, gets NXDOMAIN for a
+    vhost that has no public record, and refuses a request aimed at an address
+    that is plainly inside the programme's ranges.
+    """
+    pins: dict[str, str] = {}
+    for i, arg in enumerate(argv):
+        val = None
+        if arg in ("--resolve", "--connect-to") and i + 1 < len(argv):
+            val = argv[i + 1]
+        elif arg.startswith("--resolve="):
+            val = arg.split("=", 1)[1]
+        elif arg.startswith("--connect-to="):
+            val = arg.split("=", 1)[1]
+        if not val:
+            continue
+        parts = val.lstrip("+").split(":")
+        # --resolve host:port:ip   |   --connect-to host:port:connect-host:connect-port
+        if len(parts) >= 3 and parts[0] and parts[2]:
+            pins[parts[0].lower()] = parts[2]
+    return pins
+
+
+def extract_urls(argv: list[str]) -> list[str]:
+    """Pull the URL arguments out of a curl command line.
+
+    Only absolute http(s) URLs are considered: a bare `example.com` is ambiguous
+    with curl's own option values, and guessing wrong here would either block a
+    legitimate request or wave through an unchecked one.
+    """
+    urls = []
+    skip_next = False
+    for i, arg in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg.startswith("-"):
+            # Options that take a value which could itself look like a URL.
+            # Options whose VALUE is request content, a local file or a protocol
+            # filter — never a destination we connect to. Scope-checking these
+            # produced false OUT-OF-SCOPE blocks: `--request-target http://10.0.0.1/`
+            # is the absolute-URI *request line*, which is exactly how you test a
+            # host for being an open relay, and the TCP destination is still the
+            # in-scope address in the URL argument. Same class of false block as the
+            # old `--resolve` bug. Anything that can cause a connection (a proxy, the
+            # URL itself) stays OUT of this list on purpose.
+            if arg in ("-H", "--header", "-d", "--data", "--data-raw", "--data-binary",
+                       "--data-ascii", "--data-urlencode", "--json",
+                       "-F", "--form", "--form-string",
+                       "-e", "--referer", "-o", "--output", "-b", "--cookie",
+                       "-c", "--cookie-jar", "-A", "--user-agent",
+                       "-X", "--request", "--request-target",
+                       "-T", "--upload-file", "-D", "--dump-header",
+                       "-w", "--write-out", "--trace", "--trace-ascii",
+                       "-E", "--cert", "--key", "--cacert", "--capath",
+                       "--netrc-file", "-K", "--config", "--hsts", "--alt-svc",
+                       "--oauth2-bearer", "--aws-sigv4",
+                       "--proto", "--proto-default", "--proto-redir",
+                       "-u", "--user", "--url"):
+                if arg == "--url" and i + 1 < len(argv):
+                    urls.append(argv[i + 1])
+                skip_next = True
+            continue
+        if arg.startswith(URL_PREFIXES):
+            urls.append(arg)
+    return urls
+
+
+_STAT_KEYS = ("http_code", "method", "size_download", "size_upload",
+              "time_total", "url_effective", "num_redirects", "content_type")
+
+
+def _read_stats(path: str | None) -> dict:
+    """Pull the response facts out of curl's --write-out dump, then discard it."""
+    if not path:
+        return {}
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8") or "{}")
+        return {k: raw[k] for k in _STAT_KEYS if k in raw}
+    except Exception:  # noqa: BLE001 - stats are a nicety, never a blocker
+        return {}
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _own_header_path(argv: list[str]) -> str | None:
+    """The file the caller told curl to dump headers to (not '-' = stdout)."""
+    for i, a in enumerate(argv):
+        if a in ("-D", "--dump-header") and i + 1 < len(argv) and argv[i + 1] != "-":
+            return argv[i + 1]
+        if a.startswith("--dump-header=") and a.split("=", 1)[1] != "-":
+            return a.split("=", 1)[1]
+    return None
+
+
+def _fill_status_from_headers(entry: dict, path: str | None) -> None:
+    """http_code (+ num_redirects) from the LAST status line of a -D dump."""
+    if not path:
+        return
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    codes = [ln.split()[1] for ln in text.splitlines()
+             if ln.startswith("HTTP/") and len(ln.split()) > 1 and ln.split()[1].isdigit()]
+    codes = [c for c in codes if c != "100"]  # 100-continue is not the answer
+    if codes:
+        entry["http_code"] = int(codes[-1])
+        entry.setdefault("num_redirects", sum(1 for c in codes[:-1] if c.startswith("3")))
+
+
+def _retry_after_from_headers(path: str | None) -> str | None:
+    """The LAST `Retry-After` value in a -D dump, or None.
+
+    Last wins for the same reason the status does: with redirects followed, the
+    final response is the one that throttled us.
+    """
+    if not path:
+        return None
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    value = None
+    for line in text.splitlines():
+        if line.lower().startswith("retry-after:"):
+            value = line.split(":", 1)[1].strip()
+    return value or None
+
+
+def _throttled_hosts_of(urls: list[str]) -> list[str]:
+    hosts = []
+    for url in urls:
+        try:
+            host = urllib.parse.urlparse(url).hostname
+        except ValueError:
+            host = None
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def _own_output_path(argv: list[str]) -> str | None:
+    """The file the caller told curl to write the body to, if any."""
+    for i, a in enumerate(argv):
+        if a in ("-o", "--output") and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--output="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def _writes_own_output(argv: list[str]) -> bool:
+    """True when curl is already told where the body goes — don't fight it."""
+    return bool(_own_output_path(argv)) or any(
+        a in ("-O", "--remote-name", "-J", "--remote-header-name") for a in argv)
+
+
+def _has_flag(argv: list[str], flags: tuple[str, ...]) -> bool:
+    return any(a in flags or any(a.startswith(f + "=") for f in flags) for a in argv)
+
+
+def _targets_root_hint() -> str:
+    """Where CBH_PROJECT names are resolved from, for the refusal message."""
+    try:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "engine"))
+        from paths import targets_root  # noqa: PLC0415
+        return str(targets_root())
+    except Exception:  # noqa: BLE001
+        return "the workspace's Targets/ directory"
+
+
+def _is_local_url(url: str) -> bool:
+    """True for loopback / unqualified hosts — lab targets, not a live program."""
+    return is_local_url(url)
+
+
+
+def _explicit_header_names(argv):
+    """Header names the caller set themselves, read from -H/--header values only.
+
+    curl accepts `-H name: value`, `-Hname: value` and `--header=name: value`, plus
+    `-H 'name;'` which REMOVES a header — all four mean the caller has taken charge of
+    that name, so we leave it alone. Nothing else on the command line counts: a name
+    appearing inside a URL, a -d body or a -A user agent is not a header.
+    """
+    names = set()
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-H", "--header") and i + 1 < len(argv):
+            val, i = argv[i + 1], i + 2
+        elif a.startswith("--header="):
+            val, i = a[len("--header="):], i + 1
+        elif a.startswith("-H") and len(a) > 2:
+            val, i = a[2:], i + 1
+        else:
+            i += 1
+            continue
+        # `name: value` sets it; `name;` removes it. Either way the caller owns the name.
+        sep = min((val.find(c) for c in ":;" if c in val), default=-1)
+        if sep > 0:
+            names.add(val[:sep].strip().lower())
+    return names
+
+
+def main(argv: list[str]) -> int:
+    dry_run = "--bb-dry-run" in argv
+    argv = [a for a in argv if a != "--bb-dry-run"]
+    ungated_ok = "--bb-ungated" in argv
+    argv = [a for a in argv if a != "--bb-ungated"]
+    # A response body is evidence, and evidence that was never written down has to
+    # be re-fired to be used. Kept by default; --bb-no-store is the escape hatch for
+    # a response the operator does not want on disk at all.
+    no_store = "--bb-no-store" in argv
+    argv = [a for a in argv if a != "--bb-no-store"]
+    if not argv:
+        print("usage: bbcurl [curl args...] URL", file=sys.stderr)
+        return 2
+
+    urls = extract_urls(argv)
+    pins = extract_pins(argv)
+    eng = Engagement.detect()
+
+    if eng.name is None:
+        # Degrading to plain curl is fine for lab work, but the warning goes to
+        # stderr and callers routinely discard stderr — so a burst aimed at a
+        # live program used to leave here silently, unpaced, unscoped and
+        # unlogged. Refuse instead whenever a real remote host is on the command
+        # line; local work and an explicit opt-in still pass through.
+        remote = [u for u in urls if not _is_local_url(u)]
+        if remote and not ungated_ok:
+            # Name WHY it did not resolve. Saying "$CBH_PROJECT is unset" when it
+            # was in fact set to a name that could not be found sent a worker
+            # looking for the wrong fault: it read the refusal as a cwd problem,
+            # discarded stderr and the exit code, and produced a 142-row table of
+            # 404s that had fired nothing.
+            named = os.environ.get("CBH_PROJECT")
+            if named:
+                why = (f"$CBH_PROJECT={named!r} does not resolve to an engagement "
+                       f"folder under {_targets_root_hint()}")
+            else:
+                why = ("cwd is not inside Targets/<name>/ and $CBH_PROJECT is unset")
+            print(f"bbcurl: REFUSING — no engagement resolved ({why}), so there is no "
+                  "scope gate, no pacing and no audit trail for:\n  "
+                  + "\n  ".join(remote[:5])
+                  + "\nFix one of:\n"
+                    "  CBH_PROJECT=<name> bbcurl ...        (works from any directory;\n"
+                    "                                        <name> may be nested, e.g. standoff365/konsol)\n"
+                    "  cd /path/to/Targets/<name> && bbcurl ...\n"
+                    "  bbcurl --bb-ungated ...              (deliberate, unpaced, unlogged)\n"
+                  "This exits 3 and sends nothing. A wrapper that discards stderr AND the\n"
+                  "exit code will read a refusal as a clean run of zero results.",
+                  file=sys.stderr)
+            return 3
+        print("bbcurl: not inside a Targets/<name>/ folder — no scope gate, no pacing. "
+              "Running plain curl.", file=sys.stderr)
+        if dry_run:
+            # --bb-dry-run means "send nothing" everywhere, including the degraded
+            # path. Swallowing it here fired real requests at real targets.
+            print("would run:", " ".join(["curl", *argv]))
+            return 0
+        return subprocess.call(["curl", *argv])
+
+    # 1. Scope gate. A program's scope.md is authoritative; no scope file means we
+    #    cannot answer "is this authorised", and unanswerable is not permission.
+    scope_md = eng.project_dir / "scope.md"
+    if not scope_md.is_file():
+        print(f"bbcurl: {scope_md} not found — refusing to fire blind for engagement "
+              f"'{eng.name}'.", file=sys.stderr)
+        return 2
+    scope = _scope_from_md(str(scope_md))
+    broker = RequestBroker(engagement=eng, scope=scope, source="bbcurl")
+    try:
+        checks = broker.validate(urls, pins=pins)
+    except RequestBlocked as e:
+        print(f"bbcurl: {e}", file=sys.stderr)
+        print("Refusing to send. No request made.", file=sys.stderr)
+        return 2
+    for check in checks:
+        if check.get("pinned"):
+            print(f"bbcurl: {check['host']} pinned to {check['pinned']} — scope verified against "
+                  "the pinned address, name sent as SNI/Host only.", file=sys.stderr)
+
+    # 2. Mandatory headers.
+    try:
+        required = broker.prepare_headers({})
+    except MissingRequiredHeader as e:
+        print(f"bbcurl: BLOCKED  {e}", file=sys.stderr)
+        return 2
+    header_args = []
+    # Only a real -H/--header counts as "set by hand". Matching the name anywhere in
+    # " ".join(argv) silently dropped the mandatory header whenever the string merely
+    # appeared in another argument's VALUE — and that was not hypothetical: the Юкки
+    # programme asks for its marker inside the User-Agent, so every
+    # `-A '... X-BugBounty: qvex'` request suppressed the standalone header the
+    # engagement also requires. A dropped mandatory header is exactly what
+    # MissingRequiredHeader exists to prevent, and it failed open and in silence.
+    explicit = _explicit_header_names(argv)
+    for key, value in required.items():
+        if key.lower() in explicit:
+            continue  # explicitly set by hand on this command line — leave it alone
+        header_args += ["-H", f"{key}: {value}"]
+
+    cmd = ["curl", *header_args, *argv]
+
+    # Multi-URL batches: curl fires them back to back, so one pacing wait would
+    # under-pace the programme by a factor of N. Computed here so --bb-dry-run
+    # shows the same command the real run would send.
+    n_remote = len([u for u in urls if not _is_local_url(u)]) or 1
+    rate = None
+    if n_remote > 1 and not _has_flag(argv, ("--rate",)) and eng.min_interval > 0:
+        per_sec = 1.0 / eng.min_interval
+        rate = f"{max(1, int(per_sec))}/s" if per_sec >= 1 else f"{max(1, int(60 * per_sec))}/m"
+        cmd += ["--rate", rate]
+
+    # A multi-URL call with ONE plain -o is a measurement trap, not a convenience:
+    # curl writes only the FIRST body to that file and sends URLs 2..n to stdout, and
+    # a body with no trailing newline swallows the next -w prefix — so statuses get
+    # attributed to the WRONG URL. That produced a bogus 401 in a 15-URL batch on
+    # 2026-11-05 and the whole batch had to be re-fired one arm at a time. Refuse it
+    # here rather than let a wrong number reach a write-up.
+    if n_remote > 1:
+        for names, what, why in (
+            (("-o", "--output"), "-o",
+             "curl writes only the first body there and sends the rest to stdout, so\n"
+             "  statuses end up attributed to the wrong URL"),
+            (("-D", "--dump-header"), "-D",
+             "curl does NOT rotate the header dump per URL the way -o does: the dumps are\n"
+             "  pooled into one file, so any per-URL header reading taken that way is void"),
+        ):
+            hits = [i for i, a in enumerate(argv) if a in names]
+            if len(hits) != 1:
+                continue
+            tgt = argv[hits[0] + 1] if hits[0] + 1 < len(argv) else ""
+            if "#" in tgt or tgt == "-":
+                continue  # curl's own per-URL template, or an explicit stream the caller framed
+            print(
+                f"bbcurl: refusing {n_remote} URLs with a single {what} {tgt!r}.\n"
+                f"  {why}. Use one invocation per URL (the pacing budget already covers it),\n"
+                f"  or curl's output template, e.g. {what} 'out-#1.txt' with the URLs written\n"
+                "  as a brace/range expansion.",
+                file=sys.stderr)
+            return 2
+
+    if dry_run:
+        print(f"engagement: {eng.name}  pacing={eng.min_interval}s")
+        if rate:
+            print(f"batch: {n_remote} remote URLs -> --rate {rate}")
+        print("would run:", " ".join(cmd))
+        return 0
+
+    # An audit row of url+exit_code cannot answer "what did that request return".
+    # `%output{...}` sends curl's write-out to a file instead of stdout, so the
+    # response body the operator sees is untouched. Skipped when the caller
+    # brought their own -w, since curl honours only the last one.
+    stats_path = None
+    if not any(a == "-w" or a == "--write-out" or a.startswith("--write-out=") for a in argv):
+        fd, stats_path = tempfile.mkstemp(prefix="bbcurl-", suffix=".json")
+        os.close(fd)
+        cmd = ["curl", "-w", "%output{" + stats_path + "}%{json}", *header_args, *argv]
+
+    # Body capture. curl can only write the body to one place, so when the caller
+    # has not claimed it we take it into a temp file and replay it to stdout after
+    # the transfer — what the operator sees is byte-identical, it just arrives at
+    # the end rather than streaming. When the caller *did* pass -o, their file is
+    # hashed in place and nothing is intercepted.
+    body_path = hdr_path = None
+    if not no_store and not responses.disabled() and not _writes_own_output(argv):
+        fd, body_path = tempfile.mkstemp(prefix="bbcurl-body-", suffix=".bin")
+        os.close(fd)
+        cmd += ["-o", body_path]
+    # Headers are captured whenever the caller did not claim -D, not only when the body
+    # is: a caller-supplied -w suppresses the stats file above, and the header block is
+    # then the only place the status survives (2026-11-02 field test: 33 of 37 audit rows
+    # had http_code None, which silenced the body-on-redirect / data-in-denial signals).
+    if not no_store and not responses.disabled() and not _has_flag(argv, ("-D", "--dump-header")):
+        fd, hdr_path = tempfile.mkstemp(prefix="bbcurl-hdr-", suffix=".txt")
+        os.close(fd)
+        cmd += ["-D", hdr_path]
+
+    # 3. Pacing budget — shared across every process working this engagement.
+    #
+    # One invocation may carry many URLs, and curl fires them back to back. Waiting
+    # once for the whole batch under-paced the programme by a factor of N until
+    # 2026-11-04, when a 2,420-request pass had to hand-throttle every batch with
+    # curl's own `--rate`. So: tell the broker how many requests are coming, and
+    # inject `--rate` so the batch is spaced internally as well.
+    if rate:
+        print(f"bbcurl: {n_remote} URLs in one call -> --rate {rate} "
+              f"({eng.name} budget {eng.min_interval}s)", file=sys.stderr)
+    try:
+        waited = broker.wait_turn(requests=n_remote,
+                                  hosts=_throttled_hosts_of(urls))
+    except ThrottledHost as e:
+        # The target said slow down and the penalty outlasts a sane sleep. Refusing
+        # is the whole point: the measured failure (standoff365/mail_vk 2026-11-12
+        # 21:14) was twelve 429s answered by twelve more requests one second apart.
+        print(f"bbcurl: REFUSED — {e}", file=sys.stderr)
+        for tmp in (body_path, hdr_path):
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        if stats_path:
+            try:
+                os.unlink(stats_path)
+            except OSError:
+                pass
+        try:
+            broker.audit({"source": "bbcurl", "engagement": eng.name, "urls": urls,
+                          "exit_code": None, "blocked": "throttled",
+                          "throttled_host": e.host, "throttle_strikes": e.strikes,
+                          "seconds_remaining": round(max(0.0, e.until - time.time()), 1)})
+        except Exception:  # noqa: BLE001 - a logging failure must not change the refusal
+            pass
+        return 3
+    if waited:
+        print(f"bbcurl: paced {waited:.1f}s ({eng.name} budget {eng.min_interval}s)",
+              file=sys.stderr)
+
+    rc = subprocess.call(cmd)
+
+    if body_path:
+        try:  # the operator's output comes first, always
+            with open(body_path, "rb") as fh:
+                shutil.copyfileobj(fh, sys.stdout.buffer)
+            sys.stdout.buffer.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 4. Audit trail. Best-effort: a logging failure must never mask curl's result.
+    entry = {"source": "bbcurl", "engagement": eng.name, "urls": urls, "exit_code": rc}
+    entry.update(_read_stats(stats_path))
+
+    # 5. Response corpus: hash the body, keep one copy per distinct answer, and
+    #    record the (redacted) request that produced it so a PoC spec can be
+    #    generated later instead of retyped.
+    if "http_code" not in entry:
+        _fill_status_from_headers(entry, hdr_path or _own_header_path(argv))
+    captured = body_path or (_own_output_path(argv) if not no_store else None)
+    if captured and "size_download" not in entry:
+        try:
+            entry["size_download"] = os.path.getsize(captured)
+        except OSError:
+            pass
+    if captured and not responses.disabled():
+        entry.update(responses.save(eng.name, Path(captured),
+                                    Path(hdr_path) if hdr_path else None))
+        entry["req"] = responses.redact(argv)
+    # 5b. Wire signals (advisory): body on a 3xx, data inside a refusal, a secret in
+    #     the body. Read from the RAW capture before the temp file goes away; the
+    #     stored copy is scrubbed. hunt-nudge prints them; nothing here can fail a run.
+    if captured:
+        try:
+            with open(captured, "rb") as fh:
+                sigs = responses.wire_signals(entry, fh.read(responses.MAX_STORE))
+            if sigs:
+                entry["signals"] = sigs
+                for s in sigs:
+                    print(f"bbcurl: SIGNAL {s['signal']} (status {s.get('status')}) — {s['next']}",
+                          file=sys.stderr)
+        except Exception:  # noqa: BLE001
+            pass
+    # 5c. Throttle penalty. The status is known now, so a 429 brakes the NEXT
+    #     request instead of being ignored (measured: 12 consecutive 429s with
+    #     the following request one second behind each of them).
+    try:
+        retry_after = _retry_after_from_headers(hdr_path or _own_header_path(argv))
+        for url in urls:
+            rec = broker.note_throttle(url, entry.get("http_code"), retry_after=retry_after)
+            if rec:
+                entry["throttle"] = rec
+                print(f"bbcurl: THROTTLED {rec['host']} — {rec['status']}, "
+                      f"strike {rec['strikes']}, next request to it held "
+                      f"{rec['penalty_seconds']:g}s", file=sys.stderr)
+                break
+    except Exception:  # noqa: BLE001 - never let the brake mask curl's own result
+        pass
+    for tmp in (body_path, hdr_path):
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    try:
+        broker.audit(entry)
+    except Exception:  # noqa: BLE001
+        pass
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

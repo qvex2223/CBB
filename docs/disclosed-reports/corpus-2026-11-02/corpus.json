@@ -1,0 +1,1395 @@
+{
+ "meta": {
+  "source": "public disclosures and write-ups (URL per record)",
+  "licence": "public disclosure; facts summarised, no text copied",
+  "retrieved": "2026-11-02",
+  "notes": "corpus-refresh.py weekly run. known-urls.txt was empty, so nothing was excluded on that basis. Date-window deviation: the brief asked for material published after 2026-11-01, but no qualifying Critical/High web-app disclosure or write-up published in that 1-day window could be found - PortSwigger Research's RSS lastBuildDate was 2026-10-30, the newest Intigriti Bug Bytes roundup is 2026-10-30, HackerOne hacktivity is JS-only and unreadable without GraphQL, and bugcrowd.com/disclosures now 404s. The corpus is therefore the most recent material verifiable instead: 24 records published 2026-09-17 to 2026-10-29, the rest 2025-12 to 2026-08, with every URL checked against the previous corpus run so none repeat. Every record was read in full from its own URL; null means the page did not state the field. Medium.com returned HTTP 403 to every fetch (5 candidate write-ups dropped) and bughunters.google.com timed out (1 dropped). Fields taken from WebFetch's extracted tail rather than verbatim page text on the long slcyber.io and portswigger.net posts - treat per-case bounty figures in those as indicative."
+ },
+ "reports": [
+  {
+   "id": "r-001",
+   "source_url": "https://blog.orange.tw/posts/2026-10-the-last-proof-of-human-craft-browser-full-chain/",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": "$175,000",
+   "classes": [
+    "rce",
+    "xss",
+    "cors",
+    "auth-bypass"
+   ],
+   "first_signal": "Adding an 8-second setTimeout before the throttle trigger and switching tabs during the delay made the injected JavaScript run in the unrelated tab's origin, proving the browser-initiated navigation was not bound to the originating renderer.",
+   "mechanic": "Edge's EdgeCAGuidanceNavigationThrottle calls Chromium Navigate() from the browser process with source_contents NULL and disposition CURRENT_TAB, so Chromium substitutes the active tab as navigation source and runs an attacker javascript: URL in an arbitrary origin.",
+   "chain": [
+    "open about:blank#quickAuthPopup, an Edge-hardcoded popup-blocker whitelist entry, then redirect it to login.live.com",
+    "steal the signed-in email cross-origin via a CORS misconfiguration on assets.msn.com/service/community/users/me with credentials include",
+    "navigate the popup to guidance-ca-error/?email=..&switch_profile=javascript:.. so the throttle's GetLastCommittedURL origin check is bypassed cross-window",
+    "browser-process Navigate() with no source_contents injects JS into the active tab's origin, ignoring CSP (0-click UXSS on any site)",
+    "repeat against Edge's forked Immersive Reader read:// scheme, omitted from Chromium's not_allowing_javascript_urls_schemes blacklist, for UXSS on a privileged WebUI",
+    "from that WebUI call chrome.edgeFeedbackPrivate.zipDiagnosticLogFiles() with ../ plus a NULL byte for arbitrary file write",
+    "overwrite AutoLaunchProtocolsComponent protocols.json so any origin may auto-launch any protocol handler, reload via edge://restart",
+    "trigger telnet://; telnet.exe is absent so the PATH search reaches user-writable WindowsApps and runs a dropped PE"
+   ],
+   "impact_proof": "Live Pwn2Own Berlin 2026 win: arbitrary code execution plus sandbox escape on Microsoft Edge in under 100 lines, CSP-ignoring UXSS on arbitrary origins, and email theft of any Edge user. $175,000 and a Pwnie Award.",
+   "keywords": [
+    "uxss",
+    "sourceless navigation",
+    "navigation throttle",
+    "popup blocker bypass",
+    "cors misconfiguration",
+    "arbitrary file write",
+    "null byte truncation",
+    "protocol handler hijack"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "r-002",
+   "source_url": "https://xbow.com/labs/research/zero-to-calc-in-six-days-inside-xbow-chrome-full-chain",
+   "set": "research",
+   "severity": "critical",
+   "bounty": "$250,000",
+   "classes": [
+    "rce",
+    "race-condition",
+    "parser-differential",
+    "other"
+   ],
+   "first_signal": "A Maglev deoptimization path stored a mutable old-space HeapNumber as a deopt literal, contradicting V8's own documented invariant that HeapNumberRef is only created for immutable HeapNumbers.",
+   "mechanic": "Three separate mutate-the-supposedly-immutable invariant violations chained: Maglev deduplicating a mutable HeapNumber, Blink trusting a transferred ArrayBuffer's bytes while an in-cage view survived, and Crashpad treating a failed ReadProcessMemory on a frozen renderer as stable evidence.",
+   "chain": [
+    "JS triggers Maglev deopt so two objects share one mutable HeapNumber",
+    "the shared box desynchronises Array.prototype.at() bounds reasoning from the load offset, giving read/write across the 4 GiB pointer-compression cage",
+    "in-cage write unlinks a live Uint8Array view from its JSArrayBuffer detach chain so the view survives WebCodecs ImageDecoder transfer",
+    "animated-WebP TOCTOU: demuxer caches WebP A's frame rect, bytes are swapped to WebP B, DecodeSingleFrame combines A geometry with B payload and overflows the PartitionAlloc slot",
+    "overflow rewrites an adjacent WebPIDecoder so WebPCopyDecBufferPixels performs one chosen 64-bit write to a chosen address",
+    "relocate the Wasm Code Pointer table base; the next Wasm call lands on an island-hopping loader built from 13 Liftoff immediates",
+    "payload spawns a THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE thread to flip page protections during Crashpad's suspended-process reads",
+    "ReadUpTo retries 0x168 bytes into a 0xc0 buffer, corrupting a live SnapshotMinidumpMemoryWriter, and the hijacked write path makes FallbackCrashHandlerLauncher run cmd /k calc.exe"
+   ],
+   "impact_proof": "Calculator launched from a web page in signed Chrome Beta (video), plus an ASAN reproducer for the 256-byte WebP out-of-bounds write. Google confirmed the chain and paid the first $250,000 full-chain reward; fixes landed as V8 change 8255554 and Chromium changes 8266257, 8352899 and 8267322.",
+   "keywords": [
+    "maglev deoptimization",
+    "heapnumber deduplication",
+    "v8 sandbox escape",
+    "animated webp toctou",
+    "partitionalloc overflow",
+    "wasm code pointer table",
+    "crashpad race",
+    "bypass_process_freeze"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "r-003",
+   "source_url": "https://simonkoeck.com/writeups/google-devsite-flask-session-pickle-rce",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": "$90,000",
+   "classes": [
+    "rce",
+    "deserialization",
+    "secret-exposure",
+    "auth-bypass"
+   ],
+   "first_signal": "The Flask session cookie issued by /oauth2authorize was about 1,200 bytes, implausibly large for a CSRF token and a return URL, which prompted decoding it.",
+   "mechanic": "The OAuth flow object pickled into the signed-but-unencrypted Flask session cookie contained the OAuth client_secret, and that same secret was reused as the Flask SECRET_KEY, so the cookie carried its own signing key and the callback's pickle.loads became forgeable.",
+   "chain": [
+    "GET /oauth2authorize?return_url=%2F on developers.google.com with no account to obtain a session cookie",
+    "split payload.timestamp.signature, base64url-decode and zlib-decompress",
+    "find google_oauth2_flow_<csrf> holding an OAuth2WebServerFlow with plaintext client_id and client_secret, confirmed with pickletools.dis",
+    "recompute the itsdangerous signature offline with hmac.digest(client_secret, cookie-session, sha1) and match the served bytes",
+    "forge a session with an attacker-chosen CSRF token, an arbitrary pickle under the matching flow key and an attacker-chosen state",
+    "the callback verifies the forged signature and passes the bytes to pickle.loads, executing the REDUCE callable"
+   ],
+   "impact_proof": "Timing oracle proving server-side execution: a __reduce__ returning (time.sleep, (N,)) gave 0.207/3.193/5.194/8.283 s for N=0/3/5/8, with controls (no cookie, flipped signature byte, valid signature without flow entry) all returning distinct errors. Forged sessions also worked on firebase.google.com, developer.android.com, source.android.com and docs.partner.android.com. Hotfix in about 24 hours; $75,000 base x 1.2 report-quality multiplier.",
+   "keywords": [
+    "flask session forgery",
+    "itsdangerous key derivation",
+    "secret key reuse",
+    "oauth client_secret leak",
+    "pickle reduce rce",
+    "zlib compressed cookie",
+    "time.sleep timing oracle"
+   ],
+   "lesson": "secret-validation"
+  },
+  {
+   "id": "r-004",
+   "source_url": "https://blog.faav.net/how-i-couldve-accessed-17-trillion-microsoft-records",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": "$5,000",
+   "classes": [
+    "auth-bypass",
+    "missing_authorization",
+    "api-misconfig",
+    "info-leak"
+   ],
+   "first_signal": "While mutating JWT claims one field at a time the payload kept changing but the signature stayed byte-identical and the service kept accepting the new claims, advancing through tenant, audience, app-allowlist and user-lookup errors.",
+   "mechanic": "The internal Titan analytics API validated JWT claims (tenant, audience, app id, user) but never verified the token signature, and resolved the upn claim against local application usernames, so an alg:none token with upn admin mapped to local user id 1 with the Admin role.",
+   "chain": [
+    "find an internal service whose frontend sits behind a VPN-required employee page",
+    "subdomain search locates an unlinked API on an Azure Cloud Services host with a public Swagger where only /v2/Query, the raw-SQL route, lacks the documented bearer requirement",
+    "recover 56 table and routing definitions from 2023 Wayback Machine snapshots of the archived Superset configuration",
+    "mutate an external test-tenant token's claims until tenant, audience and app-id checks pass with an unchanged signature",
+    "replace the token with a synthetic alg:none JWT ending in a bare period",
+    "set upn to admin rather than an email-formatted identity, resolving to local user id 1 with the Admin role",
+    "POST /v2/Query with SELECT 1 returns 1; SHOW DATABASES exposes the platform metadata database and connected analytics sources"
+   ],
+   "impact_proof": "SQL executed as the platform administrator with no credentials. Read platform metadata including about 25,000 account records, 17,990 employee emails, 20,979 virtual-dataset SQL definitions, 425,891 charts and the management hierarchy; 30 of 56 archived routing values still resolved to 17 ClickHouse databases over 9,863 table names, row total 17,333,335,124,315 verified via system.tables and system.parts. No customer data or PII accessed; MSRC case 144051, endpoint locked down 09/09/26.",
+   "keywords": [
+    "alg none jwt",
+    "missing signature verification",
+    "claim mutation oracle",
+    "upn claim confusion",
+    "unauthenticated sql endpoint",
+    "wayback config recovery",
+    "clickhouse enumeration",
+    "swagger exposure"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "r-005",
+   "source_url": "https://bugcrowd.com/disclosures/63864b55-10d6-4e82-a619-192b8c0c99ad/1-click-remote-code-execution-via-twitch-embed",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": "$5,500",
+   "classes": [
+    "rce",
+    "parser-differential",
+    "race-condition",
+    "other"
+   ],
+   "first_signal": null,
+   "mechanic": "A parser gap in Twitch's force_manifest_node handling lets an inline HLS master playlist point at an attacker media playlist whose stitched-ad OMID verifier script is attacker-controlled, giving JS execution inside a Discord Twitch rich embed.",
+   "chain": [
+    "attacker page serves a Discord Twitch rich embed",
+    "force_manifest_node parser gap accepts an inline HLS master playlist referencing an attacker media playlist",
+    "custom stitched-ad OMID verifier script gives JS execution in an inherited-origin Discord popout",
+    "V8 RegExp use-after-free turned into stable compressed-cage read/write",
+    "Response(128) native-pointer leak plus a JSPI stack-control primitive and native ROP",
+    "barriered Electron IPC-wrapper export, demonstrated by launching Calculator",
+    "detached main-process WebDAV file-dialog activation forces Windows WebClient demand-start",
+    "TOCTOU on Discord clip files through an ordered IPC sequence to control the updater executable, running cmd.exe /d /k echo success"
+   ],
+   "impact_proof": "1-click RCE on the Discord desktop client: Calculator launch as the intermediate proof of the IPC-wrapper export, then execution of cmd.exe via the hijacked updater. Bugcrowd P1, status Resolved.",
+   "keywords": [
+    "hls manifest injection",
+    "omid verifier script",
+    "origin inheritance",
+    "v8 regexp uaf",
+    "jspi stack control",
+    "electron ipc",
+    "toctou updater hijack"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "r-006",
+   "source_url": "https://zonduu.me/posts/meta-graphrag-rce/",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": "$525",
+   "classes": [
+    "rce",
+    "deserialization",
+    "secret-exposure",
+    "file-upload"
+   ],
+   "first_signal": "A hardcoded API key sitting as a fallback default in a Next.js client bundle, in the form env.FAST_GRAPHRAG_API_KEY || apprunner_fast_graphrag_fgr_k3y_...",
+   "mechanic": "An unsanitised multipart filename on /graphene/graph/load_datasources gives arbitrary file write, which combines with a path-traversable dataset parameter on /visualize that pickle.loads a .pklz file with no signature check, producing root code execution.",
+   "chain": [
+    "read the hardcoded GraphRAG API key out of the client-side JS bundle",
+    "authenticate the API with X-API-Key and enumerate 3,287 datasets",
+    "abuse load_datasources with project_path at site-packages and filename ../../probe.txt to confirm traversal",
+    "write a beaconing Python module into site-packages",
+    "write a 75-byte gzipped pickle whose __reduce__ returns (__import__, (module,)) as ../graph_igraph_data.pklz",
+    "GET /visualize?dataset=../../../../../usr/local/lib/python3.11/site-packages triggers pickle.loads and runs the module (blind, server returns 500)",
+    "module exfiltrates id, env and ECS task-role credentials from 169.254.170.2 to an Interactsh callback",
+    "use the stolen role against S3, DynamoDB and Secrets Manager"
+   ],
+   "impact_proof": "Three Interactsh callbacks from a Meta ECS Fargate address with Python-urllib/3.11; decoded payload showed uid=0(root). sts get-caller-identity returned the Meta account and task role ARN. Confirmed read and write on the transcript S3 bucket and the datasets DynamoDB table (3,287 records), and full read of all 17 Secrets Manager secrets including fb_client_secret, an Okta client secret, JWT_SECRET, an OpenAI key and two GCP service accounts, one validated live.",
+   "keywords": [
+    "hardcoded api key",
+    "path traversal",
+    "arbitrary file write",
+    "site-packages module drop",
+    "unsafe pickle deserialization",
+    "blind rce",
+    "ecs task role exfiltration",
+    "secrets manager dump"
+   ],
+   "lesson": "secret-validation"
+  },
+  {
+   "id": "r-007",
+   "source_url": "https://xbow.com/labs/research/how-xbow-found-a-critical-rce-in-an-eac-voting-resource-calculator",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce",
+    "other"
+   ],
+   "first_signal": "In the Next.js frontend bundle, Time Study CSV values were extracted from the Minutes column and passed through JSON.stringify before assignment to a nested data field, meaning the Django backend received the array as a serialised string that something downstream had to turn back into data.",
+   "mechanic": "Server-side evaluation of a client-controlled string: the Django/Gunicorn backend evaluated the stringified Time Study subOptions.data value as a Python expression instead of parsing it as data.",
+   "chain": [
+    "backend index exposes almost nothing, only a stock Django response",
+    "download the public Next.js bundle to recover the API base, the /run-simulation endpoint and the form schema",
+    "first request returns 400 with a missing-field validation error; add the field from the frontend source to get a 200 baseline",
+    "mutate only the Time Study subOptions.data value with a timing expression that still resolves to the expected numeric type",
+    "HTTP 500 returned but response and backend-processing-time header both about 4.1 s, matching the requested delay",
+    "repeat with multiple delay values; 1:1 requested-versus-observed relationship with R2 = 1.000 confirms blind execution",
+    "reuse the timing channel as boolean predicates to profile the environment, then trigger an outbound HTTP request with a unique marker"
+   ],
+   "impact_proof": "Blind unauthenticated Python code execution confirmed by linear delay correlation (R2 = 1.000); timing predicates showed Linux, root user (1.83 s versus 0.13 s baseline, corroborated by whoami), a containerised environment and read access to a root-restricted path; an external server logged the GET proving outbound connectivity. Validated and fixed before the November 3, 2026 federal midterm election. Command output never returned, responses stayed 500.",
+   "keywords": [
+    "python eval injection",
+    "blind rce",
+    "timing side channel",
+    "js bundle analysis",
+    "boolean timing oracle",
+    "out-of-band callback",
+    "django gunicorn"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "r-008",
+   "source_url": "https://www.slcyber.io/research/more-critical-bugs-in-adobe-experience-manager-pre-auth-rce",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce",
+    "xxe",
+    "missing_authorization",
+    "secret-exposure"
+   ],
+   "first_signal": "Revisiting BulkImportConfigServlet from earlier AEM research: Adobe's patch restricted which properties could be set on the config node but added no authorization check, leaving the unauthenticated node-creation primitive intact.",
+   "mechanic": "An unauthenticated service-account-backed DAM bulk import, reachable through Sling path-parameter and suffix parsing differentials that defeat dispatcher filter rules, puts attacker content into the JCR, which then feeds default-resource-type servlets for stored XSS and an XmlSchemaCollection parser with external entities enabled for in-band XXE file read.",
+   "chain": [
+    "bypass the dispatcher for the POST with a duplicated bulkimportConfig path that matches an allowed rule while satisfying getBulkImportConfigPath's lastIndexOf arithmetic",
+    "bypass it for the GET with a Sling path parameter so the dispatcher sees extension .css while AEM sees json",
+    "name the config node import00.importJob.json so the unauthenticated resource path still resolves when the job runs",
+    "import attacker S3 content into /content/dam/collections/public, writable by createrendition principals and readable by everyone",
+    "flip Content-Disposition to inline via DownloadServlet's manually checked inline selector for stored XSS",
+    "import an .xsd and hit CreateCoralTreeServlet for XXE, placing the entity in an element name returned in the JSON tree",
+    "enumerate the pod filesystem and read container_environment, Azure Blob credentials and the rt-service-user.yaml holding clientId, clientSecret and private key",
+    "mint a JWT with Adobe's own jwt-auth and authenticate to the tenant author instance",
+    "POST /bin/asynccommand with operation BULK_OPERATION and a script parameter handed to GroovyScriptRunner"
+   ],
+   "impact_proof": "Unauthenticated file read demonstrated by returning /etc/passwd in the JSON tree response from a publish container; stored XSS served inline; full JCR dumped via the leaked Azure Blob backend; a working IMS bearer token for the tenant author instance; command execution confirmed twice, by an outbound ping to a Collaborator domain and by id output written to a JCR node showing uid=1001(asruser). Adobe VULN-34973, 34975, 34976, 34977.",
+   "keywords": [
+    "sling path parameter parsing",
+    "dispatcher filter bypass",
+    "unauthenticated jcr node creation",
+    "content-disposition inline xss",
+    "xmlschemacollection xxe",
+    "adobe ims jwt",
+    "groovy script execution"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-009",
+   "source_url": "https://labs.watchtowr.com/death-by-a-thousand-papercuts-papercut-pre-auth-rce-chain-and-patch-bypasses-wt-2026-0141-0144-cve-2026-82077-cve-2026-82078-cve-2026-81578/",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce",
+    "auth-bypass",
+    "missing_authorization",
+    "lfi"
+   ],
+   "first_signal": "PaperCut's advisory shipped IOC log snippets but no patch and no details, so the post-auth RCE was reproduced blind from the IOCs; the later 26.0.4 patch diff then revealed the authentication bypass and that the patched authorization check was still incomplete.",
+   "mechanic": "Apache Tapestry 3's service parameter lets one request name a root page plus a chained page or form while PaperCut's authorization runs only for the root page, and three successive PaperCut patches were each bypassed, the last pivoting to the ignored Setup Wizard forms, with a fresh post-auth RCE via relative path traversal in the fax connector name.",
+   "chain": [
+    "unauthenticated POST /app with service=direct/1/Home/SetupAdmin/$Form so only Home.pageValidate runs and SetupAdmin's check is skipped",
+    "walk the remaining wizard stages to force a fresh setup and reset the admin password",
+    "authenticate as admin",
+    "use Config Editor to set system.scan.fax.send.command-args to arguments such as /c whoami",
+    "submit a Scan to Fax job whose providerConnector traverses out of the fax connector directory to ..\\..\\..\\Windows\\System32\\cmd",
+    "FaxProviderManagerImpl.sendFaxJob reaches ProcessUtils.execAndGetOutput and executes the chosen binary with attacker-chosen args"
+   ],
+   "impact_proof": "Admin password reset demonstrated pre-auth against 26.0.4-PO build 76508, then a shell popped on that same build by chaining WT-2026-0143 with CVE-2026-82077; whoami executed via cmd.exe through the fax connector path traversal. Detection artefact generator published.",
+   "keywords": [
+    "apache tapestry 3",
+    "service parameter page chaining",
+    "pagevalidate authorization gap",
+    "setup wizard abuse",
+    "relative path traversal",
+    "patch diffing",
+    "patch bypass"
+   ],
+   "lesson": "patch-bypass"
+  },
+  {
+   "id": "r-010",
+   "source_url": "https://labs.watchtowr.com/you-wont-hear-about-these-even-in-myths-atlassian-jira-confluence-and-more-pre-auth-arbitrary-file-read-cve-2026-21589/",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "lfi",
+    "info-leak",
+    "secret-exposure",
+    "filter-injection"
+   ],
+   "first_signal": "The WAF rule Atlassian published as a workaround matched double colons, unusual for path traversal; grepping the code found escapeSlashes/unescapeSlashes in Router.java replacing / with :: and back.",
+   "mechanic": "The web-resource Router un-escapes :: back to / after routing, so an attacker-supplied resourceName reaching the deprecated getResourceRelativeToWebResource sink carries a traversal that splitLastPathPart never neutralises, giving unauthenticated arbitrary file read inside the servlet context.",
+   "chain": [
+    "unauthenticated GET to a web-resource download route of a plugin whose resource location ends in a trailing slash",
+    "place ..:: sequences in resourceName, e.g. images/..::..::..::..::WEB-INF::web.xml",
+    "Router.unescapeSlashes turns :: into / and ResourceFactory reads the local file",
+    "read WEB-INF files including WEB-INF/classes/crowd.properties on Crowd-integrated deployments",
+    "harvest plaintext application.name, application.password and crowd.server.url",
+    "authenticate to the Crowd REST API with Basic auth, create a user and add it to jira-administrators"
+   ],
+   "impact_proof": "Read WEB-INF/web.xml on Jira and the equivalent on Confluence, and WEB-INF/urlrewrite.xml on Bitbucket where web.xml is blocked. Confirmed plaintext Crowd credentials, then created user watchTowrPoC and added it to jira-administrators, with a single Python PoC for the whole chain. Traversal stays inside the Tomcat context and Crowd IP allowlisting can blunt the second half.",
+   "keywords": [
+    "double-colon slash escaping",
+    "path traversal",
+    "web-xml read",
+    "waf rule reverse engineering",
+    "jar patch diffing",
+    "crowd.properties credential leak",
+    "crowd rest api privilege escalation"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-011",
+   "source_url": "https://labs.watchtowr.com/oh-look-the-foot-gun-went-off-again-citrix-netscaler-preauth-command-injection-cve-2026-88771/",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce",
+    "filter-injection",
+    "other"
+   ],
+   "first_signal": "Rather than the usual nsppe binary, the diff between NetScaler 14.1-73.30 and 14.1-73.37 changed the Perl script ns_monuploadd_err.pl, replacing a backticked grep|sed|awk pipeline with pure Perl file reading and a list-form find.",
+   "mechanic": "A root-run diagnostic Perl script derived a core-file name from attacker-influenced log text via an unvalidated grep|sed|awk pipeline and then interpolated that string into a second backtick find command, so log-injected shell metacharacters executed as root.",
+   "chain": [
+    "unauthenticated POST /nf/auth/doAuthentication.do with a login value containing fake pitboss text plus a backticked payload",
+    "NetScaler writes the attacker string verbatim into local0/local1 log entries",
+    "ns_monuploadd_err.pl later runs and its pipeline extracts the fake NSPPE fields into WR_PPE_COREFILE_NAME",
+    "that variable is interpolated into a backtick find command",
+    "/bin/sh treats the semicolon as a separator and runs the injected command as root"
+   ],
+   "impact_proof": "id executed as root: /var/tmp/watchTowr created owner root:wheel containing uid=0(root) gid=0(wheel). Trigger is delayed up to 24 hours but can be forced; any endpoint that logs attacker-controlled data works, including User-Agent and the management interface. CVSS 4.0 9.5 per the Citrix advisory, default configuration, exploited in the wild.",
+   "keywords": [
+    "log poisoning",
+    "perl backtick interpolation",
+    "shell metacharacter injection",
+    "patch diffing",
+    "root command execution",
+    "delayed trigger"
+   ],
+   "lesson": "filter-operator"
+  },
+  {
+   "id": "r-012",
+   "source_url": "https://www.zerodayinitiative.com/blog/2026/10/20/cve-2026-35273-ssrf-to-rce-in-oracle-peoplesoft",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "ssrf",
+    "rce",
+    "deserialization",
+    "missing_authorization"
+   ],
+   "first_signal": "PSEMHUB's validateClient allowlist ships with a localhost entry by default, while PSIGW's HttpListeningConnector lets the caller choose both the target URL and the full forwarded payload, so a request originating from 127.0.0.1 satisfies the check.",
+   "mechanic": "An unvalidated HttpTargetConnector in the PeopleSoft Integration Gateway forwards an attacker-chosen URL and body, so loopback requests defeat PSEMHUB's host-allowlist authorization and reach handlers that write arbitrary files and deserialize untrusted XML.",
+   "chain": [
+    "POST /PSIGW/HttpListeningConnector specifying HttpTargetConnector, target http://127.0.0.1:8000 and the full request body in the Data field",
+    "PSEMHUB sees a localhost source so validateClient returns true",
+    "ExecuteProcessActivityCommand with attacker-controlled contents and absolute target path writes a JSP web shell into the PSEMHUB WAR path",
+    "alternatively drop malicious XML in envmetadata/data/environment so the next HubServlet init reaches XMLDecoder and the payload runs before the cast fails"
+   ],
+   "impact_proof": "Remote code execution as the PeopleSoft service account demonstrated by writing a web shell through the SSRF-fronted file write, with the XMLDecoder restart-triggered deserialization as a quieter alternative. Oracle patched all three issues under CVE-2026-35273; Mandiant reported mass exploitation by ShinyHunters from 2026-09-25.",
+   "keywords": [
+    "ssrf via integration gateway",
+    "httptargetconnector",
+    "loopback allowlist bypass",
+    "validateclient",
+    "arbitrary file write",
+    "jsp web shell",
+    "xmldecoder deserialization"
+   ],
+   "lesson": "server-side-fetcher"
+  },
+  {
+   "id": "r-013",
+   "source_url": "https://www.slcyber.io/research/a-jpeg-a-race-and-a-ghost-breaking-discourses-image-pipeline",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "cache-poison",
+    "xss",
+    "race-condition",
+    "file-upload"
+   ],
+   "first_signal": "The color_scheme_id cookie value is interpolated unescaped into a data-scheme-id attribute, and ColorScheme.find_by_id validates it only because Rails casts the string to an integer for the SQL query while the original string is kept for output.",
+   "mechanic": "An attacker-controlled cookie is reflected unescaped into the page but is not part of Discourse's Redis anonymous-cache key, turning self-XSS into sitewide stored XSS; separately a TOCTOU between optimize! and calculate_dominant_color! re-reads the same user-named tempfile and feeds it to ImageMagick without a coder prefix.",
+   "chain": [
+    "set a color_scheme_id cookie containing markup; the response caches under an unkeyed anonymous-cache entry",
+    "every later anonymous visitor with the same User-Agent receives the injected HTML",
+    "strict-dynamic blocks a raw script tag, so inject a link rel=modulepreload with data-plugin-name pointing at an attacker URL",
+    "Discourse's trusted boot loader dynamically imports that URL and the module runs with first-party trust",
+    "separately, upload a JXL/PostScript polyglot as a TL0 profile picture so FastImage reports a valid type while PDF still delegates to GhostScript",
+    "calculate_dominant_color! passes the user-named tempfile to convert, and a 3-byte channel result proves PostScript execution",
+    "widen the race with a 6324x6324 progressive JPEG, then use PostScript filenameforall plus renamefile under -dSAFER to atomically replace every /tmp/*.msvg",
+    "dominant_color now reads the substituted SVG whose xlink:href reaches the MSVG coder and executes MSL, and a repeat of the race makes store_upload return the exfiltrated file as a normal upload URL"
+   ],
+   "impact_proof": "Unauthenticated sitewide stored XSS executing attacker JavaScript for every anonymous visitor, with screenshots of the poisoning and of the modulepreload gadget firing; arbitrary file read and write on the server from a trust-level-0 profile-picture upload, with /etc/passwd exfiltrated back through a normal upload URL. CVE-2026-55674 and CVE-2026-55420; hosted fix 2026-06-15.",
+   "keywords": [
+    "unkeyed cookie cache poisoning",
+    "strict-dynamic gadget",
+    "modulepreload hijack",
+    "imagemagick policy bypass",
+    "ghostscript pdf delegate",
+    "jxl postscript polyglot",
+    "msvg msl coder",
+    "toctou tempfile swap"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "r-014",
+   "source_url": "https://www.slcyber.io/research/cache-me-if-you-can-xss-in-cloudflares-cdn-cgi-image",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "cache-poison",
+    "parser-differential",
+    "open-redirect"
+   ],
+   "first_signal": "xml-rs's emit_current_namespace_attributes writes namespace URI values into the output unescaped, unlike ordinary attributes which go through the attribute escaper.",
+   "mechanic": "Three primitives combine: an svg-hush/xml-rs serialization differential that lets an unescaped xmlns URI break out of its quotes after sanitization, Chromium alone implementing qualified Cache-Control no-cache=<field-name> so any named header including CSP is dropped from the cached representation, and an unchecked redirect follow in the image fetcher.",
+   "chain": [
+    "serve an attacker SVG with Cache-Control: no-cache=Content-Security-Policy",
+    "reach it through the victim zone's /cdn-cgi/image/ directly, or via an open redirect on an allowed origin, or via /cdn-cgi/access/logout?returnTo= chained to an open redirect on a cloudflare.com host",
+    "svg-hush passes the document because the root element uses an SVG-namespaced prefix, then serializes the unescaped default-namespace URI, injecting a script element",
+    "the first navigation is still blocked by the response CSP",
+    "open the page in a new window, navigate away and call history.back(); the retained window.opener disqualifies BFCache so Chromium falls back to its HTTP disk cache, where the body is stored without the CSP header",
+    "script executes on the victim's own hostname"
+   ],
+   "impact_proof": "Same-origin XSS on www.cloudflare.com via /cdn-cgi/image/ demonstrated with alert(location.href), plus a standalone Flask PoC for the Chromium CSP-removal behaviour. The same no-cache primitive strips Content-Type on Netlify Image CDN so an SVG/HTML polyglot is MIME-sniffed as text/html, and S3/GCS presigned response-header overrides reproduce it on object-storage origins. Reported and fixed by Cloudflare.",
+   "keywords": [
+    "svg sanitizer bypass",
+    "xmlns escaping bug",
+    "cache-control no-cache field-name",
+    "csp stripping",
+    "bfcache opt-out",
+    "history.back disk cache",
+    "open redirect chain",
+    "mime sniffing"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-015",
+   "source_url": "https://portswigger.net/research/scalable-vector-grief",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "file-upload",
+    "filter-injection",
+    "parser-differential"
+   ],
+   "first_signal": "Firefox accepts a data: URL in a Link response header for stylesheets, and the same works for type=text/xsl XSLT, so a harmless XML body still executes script.",
+   "mechanic": "SVG sanitizers model the document differently from the browsers that render it, so namespace handling, element-name casing, SMIL animation of attributes, XSLT processing instructions and use-based cross-file imports all reintroduce script the sanitizer's allow/deny logic never sees.",
+   "chain": [
+    "test 8 popular SVG sanitizers",
+    "namespace confusion: an iframe with the XHTML xmlns plus javascript: src or srcdoc, a querySelectorAll('foreignobject') case mismatch against camel-case foreignObject, and nested svg onload",
+    "SMIL: unfiltered animate attributeName=href with a javascript: value, and the animateTransform type=invalid variant on Safari",
+    "self-contained XSLT: an xml-stylesheet processing instruction pointing at a data:text/xsl stylesheet that builds a script element via concat, alerting document.domain to prove document-origin execution",
+    "move the same XSLT into a Link response header with rel=stylesheet and type=text/xsl, with a nested document() data URL copying an XHTML img onerror into a foreignObject",
+    "Safari use href=test.png#x imports an uploaded image file as SVG and runs onerror"
+   ],
+   "impact_proof": "Six of eight sanitizers bypassed with alert(document.domain)-class XSS. Named vulnerable: mattkrick/sanitize-svg, Borewit/svg-sanitizer, bgalek/safe-svg, alnorris/SVG-Sanitizer, cloudflare/svg-hush and jams2/py-svg-hush. DOMPurify and darylldoyle/svg-sanitizer resisted everything. Two unnamed popular applications were also exploited.",
+   "keywords": [
+    "svg sanitizer bypass",
+    "namespace confusion",
+    "foreignobject case mismatch",
+    "xml-stylesheet data url",
+    "xslt xss",
+    "link response header",
+    "smil animate href",
+    "use element cross-file import"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-016",
+   "source_url": "https://portswigger.net/research/smashing-the-token-limit",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "info-leak",
+    "csrf",
+    "other"
+   ],
+   "first_signal": "The browser had to grind through roughly 250 MB of CSS to recover only a 12-character hex token in the earlier webmail CSS research, and that cost-to-yield ratio implied a better encoding existed.",
+   "mechanic": "CSS attribute-substring selectors report only whether a short chunk appears in a value, not where, so treating each chunk as a graph edge overlapping by n-1 characters lets the full secret be reconstructed offline from many cheap membership answers instead of brute-forced character by character.",
+   "chain": [
+    "CSS injection gives selector-based does-this-substring-appear oracles",
+    "enumerate short overlapping chunks in one single stylesheet with no recursive @import",
+    "model chunks as edges between (n-1)-character nodes and fix the route endpoints with start and end checks",
+    "a reconstruction script enumerates every path that fits and counts candidate tokens",
+    "tiered verification: cheap 3-char checks for most characters, 2-char fallback for the rest, then selective 4-char checks grouped by first character to kill false joins"
+   ],
+   "impact_proof": "Reproduced the 12-character hex token with 1.33 MB / 25,088 selectors at a 99% one-candidate target (99,114 of 100,000 runs) and 223 KB / 4,128 selectors at 90% five-candidate, roughly 193x and 1,150x smaller than the original 257.69 MB generator. Reusing the original byte budget extracted 210 hex characters at 99% one-guess and 640 at 90% five-guess. Packaged as a Burp AT skill tested across ten public labs.",
+   "keywords": [
+    "css injection",
+    "attribute substring selector",
+    "overlapping fragments",
+    "graph stitching",
+    "token exfiltration",
+    "csrf token theft",
+    "no recursive import"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "r-017",
+   "source_url": "https://portswigger.net/research/whats-in-a-tag-name-javascript-apparently",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "filter-injection",
+    "parser-differential"
+   ],
+   "first_signal": "Browsers uppercase a tag name via tagName, but console.dir revealed localName holds the tag name in lowercase, a property that preserves an attacker-chosen string intact enough to be valid JavaScript.",
+   "mechanic": "Browsers accept near-arbitrary characters after the leading letter of a tag name and expose that name verbatim through DOM properties such as localName, so the tag name itself becomes attacker-controlled string data that an event handler can feed to a code sink.",
+   "chain": [
+    "put JS source in the tag name, e.g. <alert(1) ...>",
+    "read it back lowercase via localName",
+    "make the element focusable with tabindex=1 or contenteditable, plus autofocus",
+    "chain onfocus with itself: write localName into the handler via attributes[0].value then re-invoke with new onfocus",
+    "alternative sinks: location=localName with an uppercase javascript: tag name, innerHTML or setHTMLUnsafe concatenation, and part/classList space-splitting with eval"
+   ],
+   "impact_proof": "Working alert(1) and alert(document.domain) vectors hosted on portswigger-labs.net, with the core attributes[0].value plus new onfocus vector stated to work in every browser. Fuzzing showed letters, slashes, whitespace and newlines are transformed in tag names while Unicode line and paragraph separators are not, allowing them as JavaScript line terminators. Presented as a blocklist and WAF-signature bypass; no product named.",
+   "keywords": [
+    "localname tag name xss",
+    "onfocus self-chaining",
+    "autofocus tabindex",
+    "attributes[0].value",
+    "sethtmlunsafe",
+    "line separator u2028",
+    "waf bypass"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-018",
+   "source_url": "https://mizu.re/post/dompurify-bypass-smil-animatetransform-safari",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "xss",
+    "filter-injection",
+    "parser-differential"
+   ],
+   "first_signal": "A DOMPurify commit adding a better check for animated href attributes revealed that SMIL href animation was a live attack surface, and that in 3.2.6 and earlier animatetransform plus attributename and values were allowed by default while animate and set were explicitly disallowed.",
+   "mechanic": "WebKit's animateTransform only checks that the target attribute is animatable rather than requiring a transform-list attribute, and for an unknown type it emits no transform-function prefix, so the attacker-supplied value is written almost verbatim into href.animVal using SMIL tags DOMPurify allowed by default.",
+   "chain": [
+    "default-allowed animateTransform inside an anchor with attributeName=href",
+    "Safari's SVGAnimateElementBase only verifies animatability, unlike Chromium and Firefox, so href is a valid target",
+    "type=invalid hits SVG_TRANSFORM_UNKNOWN whose prefix is the empty string, so no translate( wrapper is prepended",
+    "from and to are disallowed but values is allowed and takes from;to, so values=XXX;javascript:alert(2) passes the whole-value IS_ALLOWED_URI check",
+    "the animation sets href.animVal to the javascript: URL and the victim's click executes it"
+   ],
+   "impact_proof": "javascript: execution demonstrated against DOMPurify 3.2.6 and earlier in default configuration on Safari, including with server-side sanitization and without mutation, form, style, node flattening or DOM clobbering. Requires user interaction and a CSP permitting javascript: URLs. Fixed by the animated-href check in 3.4.13 / 3.2.7.",
+   "keywords": [
+    "dompurify bypass",
+    "smil animatetransform",
+    "attributename href",
+    "animval",
+    "svg_transform_unknown",
+    "values semicolon from-to",
+    "is_allowed_uri",
+    "webkit safari"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-019",
+   "source_url": "https://blog.voorivex.team/oauth-token-theft-after-dompurify-two-chromium-techniques",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "oauth",
+    "info-leak",
+    "xss",
+    "secret-exposure"
+   ],
+   "first_signal": "A referrer-policy flip can be driven from inside DOMPurify-clean HTML: via referrer-policy() inside a CSS url(), and via a meta name=referrer that acts while DOMParser is still parsing.",
+   "mechanic": "Sanitising HTML is not the same as making it inert: Chromium lets a style value, which DOMPurify never parses, and a meta tag processed during DOMParser's pre-sanitization parse both set the page referrer policy to unsafe-url, so a later cross-origin subresource carries the full URL including OAuth codes in the Referer header with zero JavaScript.",
+   "chain": [
+    "find a DOMPurify sink reflecting a URL parameter via innerHTML that is reachable as an OAuth redirect_uri",
+    "victim lands on the page with code=SECRET and the payload in another parameter",
+    "technique 1: inject a style with background-image url(... referrer-policy(unsafe-url)); DOMPurify keeps style and never inspects it, and Chromium's ConsumeUrlRequestModifiers applies the policy per request",
+    "technique 2: inject meta name=referrer content=unsafe-url followed by an img; DOMParser creates the document with the live window as execution context so HTMLMetaElement sets the real page's policy before DOMPurify deletes the meta",
+    "the full URL with the authorization code arrives in the attacker's Referer logs"
+   ],
+   "impact_proof": "Both techniques demonstrated against a plain page using DOMPurify 3.4.13 at default strictness on Chromium, leaking the complete URL including the token through Referer with no JavaScript, escalated to OAuth authorization-code theft via a victim redirect_uri. Technique 1 needs CSS url() request modifiers, shipped in Chrome 150. Reported as Chromium issue 547329065 and closed as intended behaviour. Explicitly not a DOMPurify bug.",
+   "keywords": [
+    "dompurify side effects",
+    "referrer policy unsafe-url",
+    "css url request modifier",
+    "meta name=referrer",
+    "domparser execution context",
+    "oauth code leak via referer"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "r-020",
+   "source_url": "https://zhero-web-sec.github.io/research-and-things/re-cache-excessive-reflection-type-confusion-and-0-click-sxss-on-nextjs",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": "a nice five-figure bounty (exact amount not stated)",
+   "classes": [
+    "cache-poison",
+    "xss",
+    "ssrf"
+   ],
+   "first_signal": "The target reflects arbitrary request headers back into its response headers.",
+   "mechanic": "Because request headers are mirrored into responses and Next.js only sets Content-Type when one is not already present, an attacker can relabel an App Router RSC payload, which reflects URL parameters unescaped after the __PAGE__ marker, as text/html and have the CDN store it.",
+   "chain": [
+    "observe request headers reflected into response headers on a Next.js App Router target",
+    "add Rsc: 1 to receive the React Server Component payload where query parameters are reflected with < and > unescaped (dynamic pages only)",
+    "send Content-Type: text/html as a request header; the reflection loop sets it as a response header and send-payload only assigns a type if none is set, so text/x-component is never applied",
+    "craft a WAF-bypassing payload in the query string so the HTML-typed RSC response executes",
+    "Cloudflare caches the poisoned response and, because the query string is part of the cache key, the payload URL is the cache key",
+    "remove the click by poisoning the home page with a Refresh: 0; <poisoned URL> request header, which works on 200 responses where Location would be ignored"
+   ],
+   "impact_proof": "A reliable 0-click stored XSS demonstrated on the live site of an unnamed global company providing critical services, built from a two-stage cache-poisoning chain and working on current Next.js versions even without SSRF. Static _next/static paths were not affected.",
+   "keywords": [
+    "cache poisoning",
+    "rsc payload",
+    "content-type override",
+    "type confusion",
+    "header reflection",
+    "refresh header",
+    "stored xss",
+    "vary bypass"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "r-021",
+   "source_url": "https://zhero-web-sec.github.io/research-and-things/avoiding-the-paradox-a-native-full-read-ssrf-and-oneshot-dos-in-sveltekit",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "ssrf",
+    "host-header",
+    "cache-poison",
+    "parser-differential"
+   ],
+   "first_signal": "SvelteKit's Node adapter builds the request origin by interpolating the unvalidated Host header straight into a template literal, optionally trusting the forwarded proto, host and port headers.",
+   "mechanic": "An attacker-controlled origin from the Node adapter combines with an unprotected internal fetch whose three guard conditions can all be satisfied remotely, notably a decode differential between resolved_path and url.pathname plus header-based pathname overwrite on remote-function routes.",
+   "chain": [
+    "spoof the origin via Host or X-Forwarded-Host because the Node adapter trusts it when ORIGIN is unset",
+    "target the fetch block in runtime/server/respond.js guarded by three conditions",
+    "the prerendering-fallback condition is met by default since state.prerendering is unreachable at runtime",
+    "meet resolved_path !== url.pathname by URL-encoding one character of the path, since resolved_path is decoded and url.pathname is not",
+    "resolve the paradox of needing a real prerendered route by using a remote-function path, so since v2.44.0 the internal x-sveltekit-pathname header overwrites url.pathname",
+    "the server-side fetch fires to the spoofed origin and the response is returned to the attacker",
+    "point the origin at an intermediary returning 302 with an arbitrary Location, which fetch follows, removing the path restriction",
+    "DoS variant: the fetch has no try/catch, so a body with no Content-Length or a forbidden Transfer-Encoding crashes the process"
+   ],
+   "impact_proof": "Native full-read SSRF requiring only the Node adapter and at least one prerendered route, demonstrated with raw requests reading arbitrary remote content via a minimal Python 302 redirector; a one-shot single-request DoS crashing the server; and SSRF-to-stored-XSS via CDN cache poisoning when Host is outside the cache key. CVE-2025-67647, CVSS 3.1 9.4, advisory GHSA-j62c-4x62-9r35, patched 2026-01-15.",
+   "keywords": [
+    "ssrf",
+    "host header injection",
+    "origin construction",
+    "path decode differential",
+    "prerendered route",
+    "x-sveltekit-pathname",
+    "unhandled fetch rejection",
+    "redirect following"
+   ],
+   "lesson": "server-side-fetcher"
+  },
+  {
+   "id": "r-022",
+   "source_url": "https://zhero-web-sec.github.io/research-and-things/one-trigram-at-a-time-xsleak-via-universal-css-injection-and-dos-in-opera-(gx)",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": "$5000",
+   "classes": [
+    "info-leak",
+    "other"
+   ],
+   "first_signal": "A downloaded GX Mod installs itself with no permission prompt, so an iframe pointing at an arbitrary .crx silently installs a mod on any visitor, with only a dismissible notification bar.",
+   "mechanic": "GX Mods are auto-installed without consent and their CSS is applied to every page and tab, turning a customization asset into a browser-wide universal CSS injection usable as an attribute-value oracle.",
+   "chain": [
+    "host a malicious .crx and load it in an iframe so the GX Mod auto-installs with no interaction",
+    "the mod stylesheet applies to all pages, giving attacker CSS on arbitrary origins, with no @import chaining so no iterative re-evaluation",
+    "generate one static stylesheet covering all 50,653 trigrams times three positions against :has() selectors on target attributes",
+    "store each hit in its own CSS variable to defeat cascade collisions, then consume them all from a background-image var list",
+    "spread rules across three attribute sources and split consumption across html, body and html::before to avoid a page crash",
+    "redirect the victim to the account page seconds after install, before the mod can be removed",
+    "reconstruct the value with a DFS algorithm overlapping trigrams with per-branch budgets and backtracking"
+   ],
+   "impact_proof": "Zero-click cross-site exfiltration and full reconstruction of a victim's Gmail address from a single page load, including recovering the triaging analyst's own address from the trigrams they sent while reproducing. Separately a browser DoS: loading any .crx in Incognito crashes and restarts the browser, losing all tabs. Tested on Opera GX 127.0.5778.41; reported 2026-02-16, patched 2026-05-08, rated P1 after an initial P3 triage.",
+   "keywords": [
+    "css injection",
+    "xs-leak",
+    "attribute selector oracle",
+    "css variables",
+    ":has() selector",
+    "trigram reconstruction",
+    "crx auto-install",
+    "incognito dos"
+   ],
+   "lesson": "oracle"
+  },
+  {
+   "id": "r-023",
+   "source_url": "https://www.yeswehack.com/lab/research-cache-key-injection",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "cache-poison",
+    "xss",
+    "host-header",
+    "auth-bypass"
+   ],
+   "first_signal": "Nginx's proxy_cache_key concatenates keyed fragments with no separator, so shifting bytes between adjacent fragments yields an identical final key, testable black-box by splitting a marker across the URI and a header.",
+   "mechanic": "Cache keys built by concatenating multiple attacker-influenced fragments without delimiters are ambiguous, so different fragment splits collide on one key, and hashing afterwards does not help because the pre-hash byte string is identical.",
+   "chain": [
+    "identify a shared cache and probe for ambiguous concatenation by splitting a marker across suspected-adjacent fragments",
+    "cache deception with no victim interaction: request /ad with Accept: min*/* so the key equals the admin page's key, and the ACL sees only /ad",
+    "CPDoS: request /h with Accept: ome*/* so a 404 is cached under the key for /home",
+    "stored XSS: over port 80 send Host: sdummywebsite.localhost so the scheme-plus-host concatenation collides with the HTTPS key, and the victim gets a page loading script from the attacker-prefixed domain",
+    "layered caches: add an Authorization header so the CDN bypasses and forwards, poisoning the origin cache behind it"
+   ],
+   "impact_proof": "Lab PoCs on Nginx with Cloudflare in front: retrieved the localhost-only /admin dashboard response via a colliding key, cached a 404 under the /home key with the debug header showing the final key, produced the cross-scheme collision serving an attacker script host over HTTPS, and confirmed origin-cache poisoning behind Cloudflare by splitting a marker between path and Accept.",
+   "keywords": [
+    "cache key injection",
+    "proxy_cache_key concatenation",
+    "key collision",
+    "web cache deception",
+    "cpdos",
+    "http scheme confusion",
+    "host header reflection",
+    "cloudflare edge bypass"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-024",
+   "source_url": "https://portswigger.net/research/crlf-powered-desync-attacks",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "request-smuggling",
+    "cache-poison",
+    "xss",
+    "info-leak"
+   ],
+   "first_signal": "A social-media post claiming request splitting was not that uncommon, which prompted applying known desync techniques to anything vulnerable to HTTP header injection.",
+   "mechanic": "Nginx normalises and url-decodes the request path when $uri is used in proxy_pass, decoding injected CRLF sequences so the attacker controls the upstream request structure, enabling header injection, request splitting and CL.TE or 0.CL desyncs.",
+   "chain": [
+    "CRLF injection into the Nginx upstream path, a header or a cookie",
+    "split or inject headers upstream",
+    "trigger response queue poisoning or a CL.TE / 0.CL desync",
+    "optionally move the attack into the browser via fetch, window.open or an iframe",
+    "a HEAD or Range gadget yields XSS or cross-user response capture"
+   ],
+   "impact_proof": "Case studies with bounties of $20,000 (access tokens stolen from a telecom), $2,200 (live shop accounts taken over via smuggled profile updates), $500 (blind-XSS pingbacks from phones worldwide), $5,000 (PII theft on a streaming service via 0.CL plus HEAD) and $4,500 (TikTok cookie tossing), plus credit-card and PII capture across a payment provider's Kubernetes cluster, a cache-poisoned social CDN and a car maker's internal /config read.",
+   "keywords": [
+    "crlf injection",
+    "request smuggling",
+    "response queue poisoning",
+    "cl.te desync",
+    "0.cl desync",
+    "head technique",
+    "request tunnelling",
+    "nginx proxy_pass"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-025",
+   "source_url": "https://portswigger.net/research/css-the-bomb-inside-your-inbox",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": "two Fastmail issues each earned $1,000",
+   "classes": [
+    "parser-differential",
+    "info-leak",
+    "secret-exposure",
+    "xss"
+   ],
+   "first_signal": "Pasting a style block into AOL Mail and Yahoo Mail contenteditable drafts made the page text briefly flash red, showing CSS was not sanitized in time, a race condition.",
+   "mechanic": "Webmail CSS sanitizers and the browser disagree on syntax, escapes, comments, CSSOM read-back and allowed-property scope, so allow-listed or sanitized CSS mutates or is smuggled into the trusted UI where selectors, pseudo-elements and font metrics become a side channel and a click-hijacking surface.",
+   "chain": [
+    "attacker CSS or HTML enters a trusted webmail UI as an email body or via HTML on the clipboard pasted into a draft",
+    "exploit the discrepancies: label for= to drive host-app controls, fake comments and lax url() syntax, escapes between slashes, and alternate request sinks such as image-set and @import forms",
+    "bypass the image proxy and CSP to make an outbound request",
+    "exfiltrate a token with nested attribute selectors recovering leading and trailing characters, reconstructing the middle server-side from overlapping slices",
+    "where CSP blocks all external resources, build a font-height oracle from @font-face per digit with unicode-range and descent-override, and bring the matching link full-screen so one click leaks the digits"
+   ],
+   "impact_proof": "Outlook UI control from an email via labels (still unfixed at publication); indirect prompt injection of an AI browser from a Fastmail message, exfiltrating the victim's name letter by letter; Medium account takeover by stealing a 12-character hex email-login token from a draft paste on Firefox; read-tracking in Fastmail and Gmail; victim IP rendered in ProtonMail; numeric-token exfiltration under a CSP blocking all external resources with one click.",
+   "keywords": [
+    "css sanitizer bypass",
+    "attribute selector exfiltration",
+    "font-height oracle",
+    "image proxy bypass",
+    "cssom mutation",
+    "css hotwiring",
+    "indirect prompt injection"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-026",
+   "source_url": "https://portswigger.net/research/the-fragile-lock",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "saml",
+    "auth-bypass",
+    "parser-differential",
+    "xxe"
+   ],
+   "first_signal": "Ruby-SAML's overly permissive //ds:Signature XPath retrieves the first signature anywhere in the document, while validation and assertion parsing run through two different XML parsers, REXML and Nokogiri.",
+   "mechanic": "Parser inconsistencies between REXML and Nokogiri/libxml2 (namespace-ignoring attribute lookup, reserved xmlns prefix mishandling, and silent void canonicalization on relative-URI errors producing an empty-string digest) desynchronise which element is signed from which is processed.",
+   "chain": [
+    "obtain any IdP-signed XML, such as metadata with sign=true, a signed error response or WS-Fed federation metadata",
+    "insert the real signature into the Extensions extension point",
+    "use the xml-prefixed namespace trick to hide the Signature from REXML while keeping it for signature validation",
+    "place a fake Signature in the Assertion with an empty-string digest",
+    "a relative namespace URI triggers a libxml2 canonicalization error returning void, i.e. the empty string",
+    "the forged Assertion passes signature validation, giving a Golden SAML Response"
+   ],
+   "impact_proof": "Demonstrated on a vulnerable GitLab EE 17.8.4 instance with a video, and in an undisclosed large SaaS scenario (combined with Splitting the Email Atom) to forge a SAML Response, create an account and bypass authentication. Affects Ruby-SAML 1.12.4, php-saml and xmlseclibs; CVE-2025-66568, CVE-2025-66567, CVE-2025-25292, CVE-2025-23369.",
+   "keywords": [
+    "saml",
+    "xml signature wrapping",
+    "void canonicalization",
+    "attribute pollution",
+    "namespace confusion",
+    "libxml2",
+    "rexml",
+    "nokogiri"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-027",
+   "source_url": "https://parsasec.com/writeups/nextjs-server-actions/",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": "over $15,000 total across three reports (per-report amounts not stated)",
+   "classes": [
+    "missing_authorization",
+    "auth-bypass",
+    "info-leak",
+    "file-upload"
+   ],
+   "first_signal": "A network request from the App Router page carrying the Next-Action header, which exposed the action id, route and argument format together; action ids were also recoverable from _next/static chunks and from self.__next_f in the HTML.",
+   "mechanic": "Next.js Server Actions were reachable as plain POST requests addressed by a publicly visible action id, and the server-side functions performed sensitive reads and writes without verifying the caller's identity or permissions inside the function.",
+   "chain": [
+    "harvest action ids from public JS chunks and live Next-Action requests",
+    "map ids to export names via webpack output patterns",
+    "replay the POST with Next-Action, Content-Type text/plain and a JSON argument array, with all cookies and auth headers stripped",
+    "app 1: call the generic collection action to create a user, then set enableAPIKey plus a chosen API key value",
+    "use that API key on the admin API to read users, contracts, vendors and internal records",
+    "app 2: empty-argument reads dump bulk content, saveMedia edits records by id and getPresignedUrl returns a signed S3 PUT URL",
+    "app 3: getUserName and isRegistered return full rows for arbitrary emails and domains"
+   ],
+   "impact_proof": "App 1: anonymous creation of a user record and self-grant of an admin API key, then authenticated admin-API reads; about 30 mapped actions including bulk user import and ERP sync. App 2: 29 session-less actions, read payloads of 18.5/17.8/8.3 MB covering over 16,000 records, 23 editable fields via saveMedia and an accepted PUT to a dev S3 bucket. App 3: wildcard reads returning pages of user records for accounts not owned by the researcher, plus internal relationship owner and contract status across about 14 domains.",
+   "keywords": [
+    "next-action header",
+    "server action id",
+    "text/x-component",
+    "webpack chunk mining",
+    "unauthenticated post replay",
+    "mass assignment",
+    "presigned s3 url"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "r-028",
+   "source_url": "https://bobdahacker.com/blog/fifa-hack",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "missing_authorization",
+    "auth-bypass",
+    "secret-exposure",
+    "info-leak"
+   ],
+   "first_signal": "After registering on the public agent platform the account joined the organisation's shared Entra tenant, and the internal data platform authenticated it successfully, refusing only client-side because the Angular app read a NO_ROLES marker in the JWT while the backend APIs served data regardless.",
+   "mechanic": "Authorization was enforced only in the client while backend APIs trusted any authenticated member of the shared Entra tenant, so a public self-registration path granted effective access to internal production platforms.",
+   "chain": [
+    "register as a football agent on the public agents portal with ID verification",
+    "the account is auto-provisioned into the shared Entra tenant that backs all internal platforms",
+    "authenticate to the internal data platform; the frontend renders a no-role-assigned page from the JWT marker",
+    "bypass the client-side guard and the backend APIs respond with full data and no role check",
+    "reach the live production streaming management panel for all World Cup 2026 matches",
+    "read per-match RTMP ingest URLs with embedded stream keys for all five camera angles, preview manifests and broadcast HLS outputs",
+    "observe functional stream start/stop/schedule controls and match-data write operations, and the same tenant-only access on the commentator system and an Azure Function App spreadsheets API"
+   ],
+   "impact_proof": "Opened a streaming preview manifest in VLC and watched a live tactical camera feed from an active World Cup 2026 match; viewed every 2026 match with all five camera angles' RTMP ingest URLs including embedded stream keys; saw functional stream controls and match-data publish controls without exercising them; retrieved JSON listing 23 internal spreadsheets with direct Blob Storage download URLs. Fixed the next morning; the organisation never acknowledged and has no bug bounty or security.txt.",
+   "keywords": [
+    "client-side authorization bypass",
+    "broken access control",
+    "entra tenant",
+    "jwt role claim",
+    "rtmp stream key exposure",
+    "hls preview manifest",
+    "azure blob exposure"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "r-029",
+   "source_url": "https://saurinn.github.io/blog/from-input-to-shell/",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": "$10,000 (bug 1); $2,000 plus a $1,000 company bonus (bug 2)",
+   "classes": [
+    "rce",
+    "parser-differential",
+    "filter-injection",
+    "ssrf"
+   ],
+   "first_signal": "The collaborator server logged the inbound request with User-Agent curl/7.x.x, where a framework HTTP client would have sent its own UA, implying the backend was shelling out to curl.",
+   "mechanic": "The user-supplied SSH host value is interpolated unquoted into a shell string passed to PHP shell_exec, and the second entry point's URL-validity check only inspects the RFC 3986 authority component, letting payloads after ? or # pass the parser while remaining plain text to the shell.",
+   "chain": [
+    "enter a collaborator host in the SSH host field of the connectivity-test panel",
+    "spend time on SSRF bypasses (decimal, octal, IPv6 loopback, metadata endpoint, redirects) which are all blocked",
+    "notice curl/7.x.x in the collaborator logs and infer the backend shells out to curl",
+    "send http://example.com;id, which fails because appended curl args become flags for id",
+    "add a trailing semicolon to close the injected command, and the output pane returns 200 plus uid=0(root)",
+    "bypass the space filter with $IFS to read files as root",
+    "on the second endpoint, where semicolons are rejected by a URL validator, use ?;id and #;id so the authority ends before the payload"
+   ],
+   "impact_proof": "Command output rendered in the application's own output pane: id returning uid=0(root) gid=0(root) on the connectivity-test host and /etc/passwd dumped via cat$IFS/etc/passwd; on the second endpoint id returned service user uid=1111 inside a per-customer container. Both triaged, reproduced and fixed within two days.",
+   "keywords": [
+    "os command injection",
+    "shell_exec",
+    "curl user-agent fingerprint",
+    "$ifs space bypass",
+    "rfc 3986 authority",
+    "url parser differential",
+    "trailing semicolon"
+   ],
+   "lesson": "parser-differential"
+  },
+  {
+   "id": "r-030",
+   "source_url": "https://cryptocat.me/blog/bug_bounty/2026/log_exposure_session_replay/",
+   "set": "writeup",
+   "severity": "critical",
+   "bounty": "$400",
+   "classes": [
+    "info-leak",
+    "secret-exposure",
+    "auth-bypass",
+    "missing_authorization"
+   ],
+   "first_signal": "The logs directory returned 403, but guessed filenames matching logFile_DDMMYY.txt returned 200 for recent dates and 404 for an old one, revealing an unauthenticated, still-growing production log.",
+   "mechanic": "Production logs written inside the web root recorded stored-procedure calls containing live session ids and tokens, and the data API accepted those credentials without the session validity and expiry check that the UI's own Validate and Heartbeat endpoints applied.",
+   "chain": [
+    "content discovery across dozens of similar hosts",
+    "403 on the logs directory, then filename brute force on the logFile_DDMMYY.txt pattern",
+    "download 18 days of logs without logging in, plus a UAT copy dating to December 2024",
+    "parse stored-procedure arguments identified by the admin JS as user id, session id and session token",
+    "replay session id and token against the admin CaseList API as JSON sent with Content-Type text/plain",
+    "CaseList, CaseSearch and DocHistory return status 1 with full PII while Validate and Heartbeat return status 2 in the same second",
+    "CaseSearch with an empty term reports a total over 50,000 records"
+   ],
+   "impact_proof": "149 distinct session tokens, over 3,500 record ids and staff reviewer comments recovered from the logs; one record retrieved and redacted containing full name, date of birth, passport number, a second government reference, email, phone, submitter IP and uploaded document ids. A token still worked over nine hours after its last log entry despite a one-hour client-side inactivity timer, and AdminCases returning status 3 confirmed the account was recognised. Fix confirmed on retest.",
+   "keywords": [
+    "content discovery",
+    "log file in web root",
+    "filename date brute force",
+    "session token replay",
+    "session expiry not enforced",
+    "content-type text/plain api",
+    "mass pii"
+   ],
+   "lesson": "secret-validation"
+  },
+  {
+   "id": "r-031",
+   "source_url": "https://jeetbhdr.github.io/github-graphql-team-admin",
+   "set": "writeup",
+   "severity": "unknown",
+   "bounty": "$617",
+   "classes": [
+    "missing_authorization",
+    "graphql",
+    "sibling-interface"
+   ],
+   "first_signal": "The GraphQL updateTeamsRepository mutation succeeded in granting a team repository Admin using a token holding only Organization Members read and Repository Metadata read, while the documented REST equivalent requires Administration write and rejected the same change.",
+   "mechanic": "The GraphQL mutation did not enforce the repository Administration write permission that the parallel REST endpoint checks, so a token scoped only to read permissions could perform an administrative role grant.",
+   "chain": [
+    "victim org admin installs an attacker-controlled GitHub App whose consent screen requests only Members read plus Metadata read",
+    "the app generates an installation access token",
+    "Members read enumerates teams and node ids; Metadata read resolves the repository node id",
+    "POST /graphql with updateTeamsRepository and permission ADMIN",
+    "the target team is granted repository Admin and an attacker-controlled user inside that team inherits branch protection, access management, webhooks and deploy keys"
+   ],
+   "impact_proof": "The mutation returned success and granted a team ADMIN on the repository using a token with no Administration permission, with a consent screen asking only to read org members. GitHub confirmed and fixed it, classifying it Low severity; reported 2026-04-29, fixed and paid 2026-10-03.",
+   "keywords": [
+    "graphql mutation",
+    "rest vs graphql parity",
+    "github app installation token",
+    "fine-grained pat",
+    "node id enumeration",
+    "permission gap"
+   ],
+   "lesson": "sibling-interface"
+  },
+  {
+   "id": "r-032",
+   "source_url": "https://cryptocat.me/blog/research/analysis/cve_2026_18442/",
+   "set": "research",
+   "severity": "high",
+   "bounty": "$134",
+   "classes": [
+    "sqli",
+    "info-leak"
+   ],
+   "first_signal": "Release diffs after the 3.7.3 security release showed the store-list query hardened with floatval() while the shared helper wcfmmp_get_user_vendor_distance() still trusted the radius globals that checkout by-distance shipping populates.",
+   "mechanic": "Checkout-supplied latitude and longitude are stored in the WooCommerce session via sanitize_text_field with no numeric enforcement, copied into shipping-package globals, then interpolated directly into a haversine distance query whose only prepare() placeholder is the vendor id.",
+   "chain": [
+    "guest POSTs the public update_order_review AJAX endpoint with a scraped public nonce",
+    "the session setter runs parse_str over the serialized post_data form field",
+    "coordinates pass sanitize_text_field so a UNION payload survives into the WooCommerce session",
+    "the shipping package splitter copies session values into each vendor package and the by-distance method loads them into the radius globals",
+    "the helper string-interpolates both globals into the distance SQL, which prepare() cannot retroactively parameterise",
+    "the shipping-cost response or query timing acts as the oracle"
+   ],
+   "impact_proof": "Unauthenticated arbitrary database reads confirmed as blind byte-by-byte extraction of wp_users.user_pass starting at user id 1, recovering the hash prefix across four positions with a stdlib-only Python PoC offering timing and content oracle modes. Read-only DB-user access; affected 3.3.9 to 3.8.1 with 10,000+ installs, 3.8.2 added two floatval casts in the helper covering every caller. CVSS 7.5.",
+   "keywords": [
+    "update_order_review ajax",
+    "parse_str",
+    "sanitize_text_field bypass",
+    "haversine query interpolation",
+    "wpdb prepare misuse",
+    "incomplete patch caller gap",
+    "blind sqli oracle",
+    "double url encoding"
+   ],
+   "lesson": "patch-bypass"
+  },
+  {
+   "id": "r-033",
+   "source_url": "https://cryptocat.me/blog/research/analysis/cve_2026_89093/",
+   "set": "research",
+   "severity": "medium",
+   "bounty": "$34",
+   "classes": [
+    "auth-bypass",
+    "missing_authorization",
+    "info-leak"
+   ],
+   "first_signal": "While diffing plugin releases the public chat-room listing had been rewritten, replacing a 100-room cap with pagination on an endpoint whose permission callback was __return_true, which prompted a look at how guests are admitted to rooms.",
+   "mechanic": "is_ai_bot_user() decided the plugin's own AI-bot identity from a str_starts_with prefix test against a guest ip column populated verbatim from the client-supplied X-Real-IP header, and that check ran at the top of user_can_join, user_can_read and user_can_reply, short-circuiting the draft check and role allowlist.",
+   "chain": [
+    "the guest registration route only requires the caller to be logged out",
+    "get_client_ip reads HTTP_X_REAL_IP and rejects only values containing a comma, with no FILTER_VALIDATE_IP",
+    "POST registration with header X-Real-IP: ai-chat-bot-1 and an empty body",
+    "the response returns a guest id, secret and is_bot 1",
+    "replay those as guest headers against getChatRooms, join, loadMore and send",
+    "the bot short-circuit in every permission function bypasses the per-room guest opt-in"
+   ],
+   "impact_proof": "A Python PoC automated registration, room enumeration, joining, history dumping and message posting; the demo read the private exchange between the two genuine members of a staff room and posted into it. A normally-registered guest was refused with 401, confirming the boundary. Affected 2.15.33 and earlier with 10,000+ installs, fixed in 3.0.0 by using a server-set bot id and validating the IP. CVSS 5.3, CWE-287.",
+   "keywords": [
+    "x-real-ip spoofing",
+    "prefix identity check",
+    "str_starts_with",
+    "permission_callback __return_true",
+    "short-circuit authorization",
+    "guest registration abuse",
+    "patch diffing"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "r-034",
+   "source_url": "https://www.rcesecurity.com/2026/03/stackfield-desktop-app-rce-via-path-traversal-and-arbitrary-file-write-cve-2026-28373/",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce",
+    "lfi",
+    "other"
+   ],
+   "first_signal": "Tracing the Electron app's export-decryption flow through minified JavaScript showed the output directory is derived from filePath.replace(fileGuid, ) with both values read straight from the attacker-supplied room JSON and no traversal filtering.",
+   "mechanic": "The desktop client builds the decrypted-attachment write path by string-stripping the attacker-controlled fileGuid out of the attacker-controlled filePath and feeding the result to path.join, which normalises ../ and lets mkdirSync and copyFileSync write attacker bytes outside the export directory.",
+   "chain": [
+    "pull the workspace password, room id and encrypted attachment field id from any authenticated low-privileged session via a browser console snippet",
+    "build a malicious encrypted organisation export with crafted cryptFields and chunk data",
+    "defeat the dual use of filePath by crafting a matched prefix pair so the chunk lookup stays inside the export dir while the stripped value yields a traversal to the Windows Startup folder",
+    "place the chunk file at the corresponding in-export path and set filename to pwned.bat",
+    "the victim imports and decrypts the export in the desktop app",
+    "addLocalFile runs path.join, mkdirSync and copyFileSync, dropping the batch file into Startup, which runs at next logon"
+   ],
+   "impact_proof": "A working public exploit builds the encrypted export and on decryption writes pwned.bat containing start calc.exe into the Windows Startup folder, shown in a PoC GIF; macOS equivalents named are ~/.zshenv and ~/.ssh/authorized_keys. CVE-2026-28373; desktop 1.10.2 shipped one day after notification.",
+   "keywords": [
+    "path traversal",
+    "arbitrary file write",
+    "electron desktop app",
+    "path.join normalization",
+    "copyfilesync",
+    "startup folder persistence",
+    "prefix-strip trick"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "r-035",
+   "source_url": "https://calif.io/php2shell",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce",
+    "parser-differential",
+    "deserialization"
+   ],
+   "first_signal": "Two memory-pressure findings: PHP checks post_max_size against the declared Content-Length but not against bytes actually consumed, and RFC1867 parts with an empty filename are not counted toward max_file_uploads yet still allocate all six $_FILES entries, so nested names blow past a 128 MiB heap from an under-8 MiB body.",
+   "mechanic": "An attacker-timed memory_limit or fatal bailout interrupts non-atomic publish-state then fallible-work then commit sequences in the Zend engine, so request shutdown or a later request consumes state that was counted and published but never initialised or never torn down, giving use-after-free style control and RCE.",
+   "chain": [
+    "craft a multipart body that exhausts memory_limit at a chosen allocation",
+    "interrupt one of three points: a hashtable add that increments counters before the key string is initialised, session.upload_progress initialising session state before modules_activated, or a post-startup fatal inside the unserializer that skips its destroy",
+    "the SAPI decides consumption: mod_php still runs request shutdown after startup failure and reuses the worker, while PHP-FPM discards the child",
+    "for the unserializer path a second multipart request reaches upload progress before session RINIT and reclaims the freed storage, so the stale decoder is reused",
+    "abuse serialized R:/r: references into the reclaimed reference list and a negative signed used_slots in the destructor block so the copy writes a genuine zval pointer plus type to an attacker-chosen address"
+   ],
+   "impact_proof": "CVE-2026-109618 and CVE-2026-109619, fixed in the PHP October 2026 security release. Pre-auth RCE confirmed against WordPress 7.1.2, Drupal 11.4.3, Joomla 6.1.4, MediaWiki 1.46.2, Roundcube 1.7.4, Magento 2.4.9, phpMyAdmin 5.2.3, Nextcloud 35.0.1, Laravel 13.11, Symfony 8.1 and WHMCS, exploitable under default configuration; demo videos for both mod_php and Nginx with PHP-FPM. PHP confirmed the RCE PoC worked on 2026-08-15. Earliest affected path dates to PHP 5.4.0.",
+   "keywords": [
+    "memory_limit oom",
+    "zend_bailout longjmp",
+    "hashtable bucket teardown",
+    "session upload_progress",
+    "use-after-free",
+    "unserialize destructor list",
+    "mod_php vs php-fpm sapi",
+    "post_max_size bypass"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "r-036",
+   "source_url": "https://www.intigriti.com/researchers/blog/news/php2shell",
+   "set": "research",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "rce",
+    "info-leak",
+    "deserialization"
+   ],
+   "first_signal": null,
+   "mechanic": "A defender-facing summary of Calif's PHP2Shell research that adds no new root-cause analysis but maps the same engine flaw to four attack chains and two CVEs: a fatal or OOM-driven longjmp bailout leaves PHP internal state corrupt or stale and a surviving worker then trusts it.",
+   "chain": [
+    "chain 1 (CVE-2026-109618, Apache mod_php): a crafted multipart POST exhausts memory_limit during startup, the bailout leaves partially initialised request memory, and mod_php unconditionally runs request shutdown, giving unauthenticated RCE before application code runs",
+    "chain 2 (CVE-2026-109619, PHP 8.5 fatal_error_backtraces): the backtrace global is never reset on shutdown, so the next request raising any diagnostic, even a deprecation warning, consumes freed memory",
+    "chain 3 (CVE-2026-109619, session.upload_progress): upload initialises request-owned session and decoder state before module init, and the next request's upload-progress operation reads those globals before ordinary init",
+    "chain 4 (CVE-2026-109618): the same OOM corruption used to read arbitrary worker memory, which also leaks layout to make chain 1 more reliable"
+   ],
+   "impact_proof": "Emergency PHP release on 2026-10-21 for CVE-2026-109618 and CVE-2026-109619, CVSS 9.2, with branch table 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12 and 8.1 and older EOL. Calif demonstrated full unconditional RCE with default settings; Wiz researchers demonstrated arbitrary server memory disclosure including session tokens, DB credentials and API keys. Cites advisory GHSA-6wmf-4rv5-p3rp and WAF mitigation guides.",
+   "keywords": [
+    "longjmp bailout",
+    "request shutdown after startup failure",
+    "fatal_error_backtraces",
+    "session.upload_progress",
+    "use-after-free",
+    "memory disclosure",
+    "waf virtual patching"
+   ],
+   "lesson": "framework-internals"
+  },
+  {
+   "id": "r-037",
+   "source_url": "https://github.com/Metnew/write-ups/tree/main/claude-code-worktree-sandbox-escape",
+   "set": "writeup",
+   "severity": "high",
+   "bounty": "$3,700 plus $50 retest",
+   "classes": [
+    "rce",
+    "other",
+    "info-leak"
+   ],
+   "first_signal": "Hunting for a way to force writes outside the current directory under maximum restrictions, the agent was found to be able to create git worktrees, and worktree-name validation accepted the literal name .git.",
+   "mechanic": "Worktree-name validation did not reject .git, so a malicious repo whose root is itself a valid gitdir produces gitdir confusion in which a later git status trusts attacker-controlled core.fsmonitor, and because worktree tools follow symlinks the resulting code execution can write ~/.zshenv, which zsh sources before the seatbelt profile is applied.",
+   "chain": [
+    "victim clones a repo whose root doubles as a bare gitdir and opens it with the sandbox enabled",
+    "prompt injection in CLAUDE.md, framed as a mandatory verification procedure, drives the agent's own worktree tools",
+    "entering and exiting the worktree named .git seeds gitdir confusion so the worktrees directory is accepted as a repo root",
+    "each worktree call or git status fires the root-level core.fsmonitor command, advancing a line-count state machine",
+    "stage 1 replaces the worktrees directory with a symlink to $HOME so later worktree creation writes into $HOME/.git",
+    "stage 3 forges worktree metadata registering $HOME itself as a navigable worktree",
+    "the agent enters that path, git status resolves gitdir to ~/.git, fsmonitor runs with write access to $HOME and appends to .zshenv",
+    "the next Bash-tool invocation runs zsh, which sources ~/.zshenv before seatbelt takes effect"
+   ],
+   "impact_proof": "CVE-2026-55607 / GHSA-7835-87q9-rgvv, High, CVSS 7.7, published 2026-06-25. End-to-end PoC pops Calculator via ~/.zshenv; the repo ships the malicious repo archive, a screencast and the sandbox-enabled settings proving configuration. Affected Claude Code CLI v2.1.139 on macOS, patched in 2.1.163 by rejecting .git as a worktree name. HackerOne report 3727895.",
+   "keywords": [
+    "git worktree confusion",
+    "core.fsmonitor code exec",
+    "prompt injection",
+    "symlink traversal to home",
+    "zshenv pre-sandbox shell init",
+    "seatbelt sandbox escape"
+   ],
+   "lesson": "composition"
+  },
+  {
+   "id": "r-038",
+   "source_url": "https://www.microsoft.com/en-us/msrc/blog/2026/10/ssrf-impact-in-cloud-environments-beyond-network-reachability",
+   "set": "research",
+   "severity": "unknown",
+   "bounty": null,
+   "classes": [
+    "ssrf",
+    "secret-exposure",
+    "info-leak"
+   ],
+   "first_signal": "Across coordinated disclosures and internal service investigations SSRF recurred as a high-impact class in multiple product verticals, not as isolated coding mistakes but as a systemic consequence of cloud architecture.",
+   "mechanic": "Untrusted input determines an outbound request's destination, and that request inherits the application's network reachability and identity, so internal control-plane and metadata endpoints that assume network locality implies trust become attacker-reachable.",
+   "chain": [
+    "a feature that fetches remote resources takes a user-influenced URL, hostname, subdomain or workspace identifier",
+    "destination validation is absent, ad hoc, or bypassable via redirects, alternate encodings or unexpected schemes",
+    "the server issues the request from its own execution context",
+    "the request reaches internal services, loopback and link-local interfaces, or the instance metadata service",
+    "IMDS returns configuration and short-lived identity credentials, giving credential exposure and potential cross-tenant privilege misuse"
+   ],
+   "impact_proof": "No single exploit or CVE: this is MSRC's published severity rubric for SSRF (Critical for cross-tenant disclosure or EoP after reaching internal servers, down to Low for blind port scanning) plus open-sourced anti-SSRF libraries at github.com/microsoft/antissrf, and prescriptive requirements including resolving DNS to IPs before sending, checking IPv6, coupling resolution to execution against DNS TOCTOU, full re-validation after every redirect and never returning raw upstream bodies.",
+   "keywords": [
+    "imds metadata endpoint",
+    "dns rebinding toctou",
+    "redirect revalidation",
+    "egress filtering",
+    "url allowlist",
+    "scheme restriction",
+    "antissrf library"
+   ],
+   "lesson": "server-side-fetcher"
+  },
+  {
+   "id": "r-039",
+   "source_url": "https://hackerone.com/reports/3862641",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": "$15,000",
+   "classes": [
+    "idor",
+    "info-leak",
+    "missing_authorization"
+   ],
+   "first_signal": "The endpoint rejected the request with HTTP 422 and the message that the caller lacks appropriate access, yet the error response body still carried private report data in its context.subject field.",
+   "mechanic": "An information-disclosure flaw in the /reports/{id}/reference.json endpoint where the authorization check fired correctly but the rejection response body still serialised the private report it had just refused.",
+   "chain": [
+    "register a VDP account through the public vdp-sign-up route",
+    "take target report ids from the approved test reports listed on the programme page",
+    "POST to /reports/{id}/reference.json with an empty JSON body, the session cookie and a valid CSRF token",
+    "read the private report details out of the context.subject field of the 422 rejection"
+   ],
+   "impact_proof": "Programme HackerOne, Insecure Direct Object Reference, state Resolved, rated critical by the team, $15,000. Reported 2026-07-14, disclosed 2026-10-01. The team summary states the issue is fixed and that no evidence of misuse was found; 371 votes.",
+   "keywords": [
+    "reference.json endpoint",
+    "422 error body disclosure",
+    "idor",
+    "vdp account scope",
+    "csrf token required",
+    "context.subject leak"
+   ],
+   "lesson": "body-not-status"
+  },
+  {
+   "id": "r-040",
+   "source_url": "https://hackerone.com/reports/3694007",
+   "set": "hackerone",
+   "severity": "high",
+   "bounty": "$7,000",
+   "classes": [
+    "rce",
+    "graphql",
+    "missing_authorization"
+   ],
+   "first_signal": "Schema analysis showed the sort_query String argument on Query.search accepts raw Elasticsearch JSON sort specifications, confirmed because a field-based JSON sort took effect on the results.",
+   "mechanic": "The free-form sort_query string is passed to the downstream Elasticsearch cluster as the raw sort parameter with no schema validation or allowlisting, so attacker-supplied _script Painless sort directives compile and execute per document inside the ES JVM.",
+   "chain": [
+    "authenticated reporter-level GraphQL POST to hackerone.com/graphql",
+    "supply sort_query with a _script Painless source",
+    "differential compile probes, a valid constant versus an empty or unterminated source, prove compilation (200 versus 500)",
+    "a script reading doc[_seq_no].value reorders results, proving per-document execution",
+    "code executes in the Elasticsearch query phase, before the resolver-layer authorization filter"
+   ],
+   "impact_proof": "Per-document Painless compilation and execution demonstrated: a constant-source request and a _seq_no-reading request returned result sets with zero overlap in the first five positions, the latter strictly ascending and matching the known-good baseline sort. Scoped to the reporter's own 716 notifications with no cross-tenant read. Programme HackerOne, severity high, CVSS 4.0 score 8.8, $7,000. Created 2026-04-24, disclosed 2026-06-17.",
+   "keywords": [
+    "elasticsearch painless",
+    "script injection",
+    "graphql sort_query",
+    "_script sort",
+    "differential compile probe",
+    "_seq_no oracle"
+   ],
+   "lesson": "client-supplied-field"
+  },
+  {
+   "id": "r-041",
+   "source_url": "https://hackerone.com/reports/3165242",
+   "set": "hackerone",
+   "severity": "critical",
+   "bounty": null,
+   "classes": [
+    "ssrf"
+   ],
+   "first_signal": "Source-code review of Game.scala showed the players query parameter is read with get(players) and passed directly to RealPlayerApi.apply() with no URL validation.",
+   "mechanic": "The user-controlled players parameter flows unvalidated into ws.url(url).get(), so the server fetches an arbitrary attacker-specified URL.",
+   "chain": [
+    "unauthenticated request to /game/export/{GAME_ID}?players={URL} or the API export variants",
+    "the players value is passed to RealPlayerApi.apply",
+    "the server issues an HTTP GET to the attacker URL",
+    "reach internal services or the cloud metadata endpoint"
+   ],
+   "impact_proof": "Confirmed live on production that the server makes an HTTP request to the supplied URL, verified via webhook.site and server logs; the reporter deliberately did not send requests to internal IP ranges. Programme Lichess, severity critical, CVSS 9.8 (reporter-scored), no bounty (programme does not offer bounties). Created 2025-05-28, disclosed 2025-06-03.",
+   "keywords": [
+    "ssrf",
+    "cloud metadata",
+    "169.254.169.254",
+    "unauthenticated endpoint",
+    "players parameter",
+    "missing url validation",
+    "scala"
+   ],
+   "lesson": "server-side-fetcher"
+  }
+ ]
+}

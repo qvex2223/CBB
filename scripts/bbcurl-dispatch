@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# bbcurl-dispatch — the `bbcurl` name on PATH, pointed at this workspace's transport.
+#
+# This used to pick between two workspaces: ~/.local/bin/bbcurl was one symlink and a
+# second toolkit shipped its own, older copy (no wire signals, no status recovery under a
+# caller -w). That second toolkit is gone (2026-11-13), so there is one implementation
+# left and this file stays only because the operator's PATH, the gates and the docs all
+# call `bbcurl` by name. `cbbcurl` is the same thing under an explicit name.
+#
+# Scope checking lives in scripts/bbcurl itself: an engagement this workspace does not
+# know is refused there, never fired ungated.
+set -u
+CLAUDE_ROOT="${CBH_CLAUDE_ROOT:-/home/qvex/security-research/BugHunter}"
+
+if [ "${CBH_BBCURL_WHICH:-}" = "1" ]; then  # debugging aid: say which copy would run
+    echo claude; exit 0
+fi
+exec "$CLAUDE_ROOT/scripts/bbcurl" "$@"
