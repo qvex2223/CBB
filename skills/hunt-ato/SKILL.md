@@ -130,3 +130,21 @@ dig +short staging.target.com    # CNAME -> nonexistent-app.herokuapp.com  (NXDO
 - **`offensive-osint`** — Path 8 force-multiplier: most security-question answers (birth city, pet, first school, mother's maiden name) are OSINT-able from social profiles → recover account B with no brute force at all.
 - **`security-arsenal`** — Pull the Password-Reset Bypass Tables (`X-Forwarded-Host`, `X-Host`, `X-HTTP-Host-Override`, dual-Host smuggling), token-entropy payloads (sequential numeric, time-based predictable), the JWT attack table, and the always-rejected list for "rate-limit on /forgot-password" reports.
 - **`triage-validation`** — Run the Pre-Severity Gate before claiming Critical on an ATO that needs the victim to click a link AND enter credentials AND pass CAPTCHA. The reproducibility step (10-minute fresh-browser walkthrough taking over test account B from attacker A's session) separates Critical-paid from Self-XSS-tier rejected.
+
+---
+
+## Path — token purpose confusion (no victim interaction)
+
+A record minted by one auth flow and redeemed by another's verifier is a full takeover with no
+click, no credential and no second factor: the flow that issues the session never asked for one.
+Primitive in `hunt-oauth` (`**Class:** token-purpose`, CVE-2026-114607).
+
+Proof of impact, in one spec: mint the record naming an identity you do **not** control, redeem it
+at the other verifier, then read the identity back from the session endpoint (`/get-session`,
+`/api/me`). The session endpoint's answer is the impact — the `Set-Cookie` alone is not, because a
+session for nobody looks the same on the wire.
+
+Severity: Critical when the redeemed session belongs to an existing account. When the address has
+no account and the flow creates a fresh verified one instead, that is account **pre-registration**
+of someone else's address — real, usually High, and written up as what it is rather than inflated.
+

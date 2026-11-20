@@ -83,6 +83,23 @@ PLAYWRIGHT_SCRIPTERS = {"browser_run_code_unsafe", "browser_evaluate"}
 # current origin, which this hook does not have, and guessing an origin would either
 # invent an out-of-scope claim or wave a real one through.
 SCRIPT_URL_RE = re.compile(r"""https?://[^\s'"`)\\<>]+""")
+# A snippet that SENDS. Measured on Grok session 01a1ea8b (intigriti/1password, 2026-11-18):
+# workers fired the target's API from inside the page and the extension service worker with
+# `fetch('/api/v3/auth/start')` and a client method `CTX.session.request({path: ...})` —
+# relative paths, so the URL branch above saw nothing and passed them. Two lanes reported
+# ~110 target requests between them; the audit holds 14 browser rows for the whole
+# engagement. A sender with no absolute URL literal is refused now, with the remedy: name
+# every target as an absolute URL (a comment is enough when the client takes a bare path),
+# and the gate scopes, paces and audits each one. Wrapping `fetch` to observe it does not
+# match (`self.fetch = …`, `origFetch(…)`), because observing is not sending.
+SCRIPT_SEND_RE = re.compile(
+    r"\bfetch\s*\(|\bXMLHttpRequest\b|\bsendBeacon\s*\(|\bnew\s+WebSocket\s*\(|"
+    r"\bnew\s+EventSource\s*\(|\.request\s*\(|\.request\.(?:get|post|put|patch|delete|"
+    r"head|fetch)\s*\(")
+# `browser_run_code_unsafe {"filename": ...}` carries a PATH, not code. On the same session
+# 11 calls went that way (`sw-invite-fire.js`, `sw-keysets.js`, ...) and the gate read only
+# the path string. The file is read and gated as if its text were inline.
+SCRIPT_FILE_MAX_BYTES = 1_000_000
 
 # Caido: tool -> how the target is expressed. Names carry their own prefix, so the
 # server-qualified call is mcp__caido__caido_send_request.
@@ -535,12 +552,39 @@ def main() -> int:
         # names per tool (`code`, `function`, ...) and a new one must not silently
         # reopen the hole.
         blob = " ".join(v for v in ti.values() if isinstance(v, str))
+        fname = ti.get("filename") if isinstance(ti, dict) else None
+        if isinstance(fname, str) and fname.strip():
+            try:
+                fp = Path(fname).expanduser()
+                if fp.stat().st_size > SCRIPT_FILE_MAX_BYTES:
+                    raise OSError("larger than the gate reads")
+                blob += " " + fp.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                return _deny(
+                    f"MCP GATE: could not read the script file `{fname}` ({e}), so nothing "
+                    "in it can be scope-checked, paced or audited. Pass the code inline as "
+                    "`code`, or a readable file under 1 MB. Nothing was sent.")
         urls = []
         for u in SCRIPT_URL_RE.findall(blob):
             u = u.rstrip(".,;")
             if is_non_network_url(u) or u in urls:
                 continue
             urls.append(u)
+        if not [u for u in urls if not is_local_url(unwrap_url(u))] and SCRIPT_SEND_RE.search(blob):
+            return _deny(
+                "MCP GATE: this snippet sends a request (fetch / XMLHttpRequest / "
+                "`.request(` / WebSocket) but names no absolute URL, so the target cannot be "
+                "scope-checked, paced or audited — which makes it a bbcurl bypass.\n"
+                "Do one of these instead:\n"
+                "  * the browser goes through Caido: drive the flow in the page, then read the "
+                "real request with `caido_list_requests` (HTTPQL `req.host.eq:\"<host>\"`) "
+                "and mutate it with `caido_edit_request` — gated, and the Caido entry is your "
+                "wire evidence;\n"
+                "  * the request must come from inside the client (a per-request signature or "
+                "MAC that a replay cannot carry): name EVERY target as an absolute URL literal "
+                "in the snippet — a comment such as `// https://host/api/v2/x` is enough when "
+                "the client takes a bare path — and the gate scopes, paces and audits each.\n"
+                "Nothing was sent.")
         if not urls:
             return _allow()      # in-page read, or a target this hook cannot see
         targets = [(unwrap_url(u), "GET") for u in urls]

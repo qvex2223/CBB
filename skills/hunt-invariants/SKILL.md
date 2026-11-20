@@ -108,3 +108,21 @@ Not a licence to move real money, ship real goods, or affect other users.
 Minimal PoC only — if a check could affect another user or availability, stop
 and get program approval first. And not a substitute for the class skills once
 the broken invariant has a class name.
+
+---
+
+## Invariant — revocation is total
+
+*Every grant that depended on a relationship ends when the relationship ends.*
+
+Break it by moving the object rather than the identity. Trust keyed on a permanent object id
+(`repo_id`, `project_id`, `source_id`) outlives a change of owner, because the revocation path
+walks the owner's current objects and the dispatch path loads the object by id
+(CVE-2026-118535). The same shape covers access revoked from a collaborator while a fork, a
+cached clone or a server-emitted parameter still reaches the private source (CVE-2026-123009).
+
+The test is one sentence: **after the grant is gone, fire the request again.** Not the UI — the
+app's own API, with the credential that should no longer work.
+
+**SKIP** — `api-security` carries the transfer walkthrough; `hunt-idor` carries the mutation.
+

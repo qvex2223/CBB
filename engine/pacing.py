@@ -27,6 +27,7 @@ Engagement config lives in `Targets/<name>/profile.json`:
       "project": "kcell",
       "min_interval_seconds": 12,
       "required_headers": {"X-Bug-Bounty": "myhandle"},
+      "required_cookie": {"X_Bug_Bounty": "myhandle"},
       "max_concurrency": 2,
       "note": "pacing carried over from the Allur IP-ban incident"
     }
@@ -171,6 +172,14 @@ class ThrottledHost(RuntimeError):
             f"(`python3 engine/pacing.py --status` shows the clock).")
 
 
+class MissingRequiredCookie(RuntimeError):
+    """A programme mandates a cookie and `profile.json` has no value for it.
+
+    Distinct from MissingRequiredHeader because the remedy is a different profile key and
+    a different curl flag (`-b`, never `-H Cookie:`).
+    """
+
+
 class MissingRequiredHeader(RuntimeError):
     """A program mandates a header whose value is not configured. Refuse to fire.
 
@@ -223,6 +232,45 @@ class Engagement:
     def required_headers(self) -> dict:
         headers = self.profile.get("required_headers") or {}
         return headers if isinstance(headers, dict) else {}
+
+    @property
+    def required_cookies(self) -> dict:
+        """Cookie name -> value this programme mandates on every request.
+
+        A separate field from `required_headers`, because a cookie CANNOT be delivered as
+        one. `apply_headers` merges by header name and bbcurl emits `-H "Cookie: ..."`;
+        curl lets an explicit `-H Cookie:` replace the header it would have built from
+        `-b`, so a mandatory cookie expressed as a header silently drops an authenticated
+        lane's session jar. hh.ru is exactly this shape — its programme text asks for an
+        `X_Bug_Bounty` **cookie** parameter, and `scope.md` says "(not a header!)" — and
+        with nowhere to put it the identification lived in worker briefs instead: 1 of 1823
+        requests went out unidentified on 2026-11-14.
+
+            "required_cookie": {"X_Bug_Bounty": "qvex"}
+        """
+        cookies = self.profile.get("required_cookie") or {}
+        return cookies if isinstance(cookies, dict) else {}
+
+    def missing_cookie_values(self) -> list:
+        """Required cookie names whose value is unset — same rule as a required header."""
+        return [k for k, v in self.required_cookies.items() if v in (None, "", "TODO")]
+
+    def apply_cookies(self, present: dict | None) -> dict:
+        """The required pairs this request still needs, given the ones already on it.
+
+        Returns only what is MISSING, so the caller merges rather than replaces: a lane
+        carrying a session jar keeps it and gains the identification pair. An explicit
+        value wins, exactly like `apply_headers` — a researcher overriding by hand is a
+        deliberate act.
+        """
+        missing = self.missing_cookie_values()
+        if missing:
+            raise MissingRequiredCookie(
+                f"{self.name}: required cookie(s) {', '.join(missing)} have no value in "
+                f"{PROFILE_NAME}. Set them before firing — this programme rejects or blocks "
+                f"requests without them.")
+        have = {str(k).lower() for k in (present or {})}
+        return {k: v for k, v in self.required_cookies.items() if k.lower() not in have}
 
     @property
     def max_concurrency(self) -> int:
@@ -505,6 +553,7 @@ class Engagement:
             "profile_found": bool(self.profile),
             "min_interval_seconds": self.min_interval,
             "required_headers": sorted(self.required_headers),
+            "required_cookies": sorted(self.required_cookies),
             "requests_paced": state.get("count", 0),
             "seconds_until_next": round(remaining, 1),
             "state_file": str(path),
@@ -674,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"profile.json:      {'found' if st['profile_found'] else 'MISSING — using defaults'}")
     print(f"min interval:      {st['min_interval_seconds']}s (global, all hosts)")
     print(f"required headers:  {', '.join(st['required_headers']) or '(none)'}")
+    print(f"required cookies:  {', '.join(st.get('required_cookies') or []) or '(none)'}")
     print(f"requests paced:    {st['requests_paced']}")
     print(f"next request in:   {st['seconds_until_next']}s")
     throttled = st.get("throttled_hosts") or []

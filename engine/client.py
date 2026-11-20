@@ -13,16 +13,22 @@ hooks are enforced, and tells that session to send through `bbcurl` only.
 
 Detection order (first hit wins):
   1. `CBH_AGENT=<name>` — explicit override, always respected.
-  2. `CLAUDECODE=1` → claude.
-  3. Process ancestry (`/proc/<pid>/cmdline` up the ppid chain) — so a client that
-     exports nothing is still recognised without the operator setting anything.
-  4. `generic` — the safe row: assume no hooks, assume you may send, crew 6.
+  2. A non-Claude client's own env (`GROK_AGENT`/`GROK_SESSION_ID`) → generic. Before
+     `CLAUDECODE`, because Grok Build's compat layer leaks `CLAUDECODE=1`; the two runtime
+     gates (`runtime/inline-gate.mjs`, `runtime/playwright-mcp.mjs`) already resolve in
+     this order and this module has to agree with them, not contradict them.
+  3. `CLAUDECODE=1` → claude.
+  4. Process ancestry (`/proc/<pid>/cmdline` up the ppid chain, nearest ancestor first) —
+     so a client that exports nothing is still recognised without the operator setting
+     anything. Matched on exact argv tokens, never substrings: see `_PROC_MARKERS`.
+  5. `generic` — the safe row: assume no hooks, assume you may send, crew 6.
 
 Capability fields are what the doctrine keys on, so AGENTS.md can say "your row" once
 instead of repeating itself per client:
   crew                   how many concurrent workers to launch by default
   orchestrator_may_send  may the main thread fire requests, or workers only
   gates_enforced         are the PreToolUse hooks (crew/skill/agent-gate) live
+  stop_hook              does a Stop hook keep this client hunting after a finding
   skills / commands      how this client loads `skills/` and `commands/`
   subagents              how to spawn a role worker
   browser                how browser work is driven
@@ -45,6 +51,7 @@ PROFILES: dict[str, dict] = {
         "crew": 3,
         "orchestrator_may_send": False,
         "gates_enforced": True,
+        "stop_hook": True,
         "skills": "Skill(\"<name>\") tool; copies in ~/.claude/skills (scripts/sync_clients.py)",
         "commands": "/<name> slash commands; copies in ~/.claude/commands",
         "subagents": "Agent tool, subagent_type from .claude/agents/ (deep-hunter|scout|refuter)",
@@ -63,9 +70,22 @@ PROFILES: dict[str, dict] = {
         "crew": 6,
         "orchestrator_may_send": True,
         "gates_enforced": False,
+        # Separate from gates_enforced on purpose: that field is about being DENIED, this one
+        # about being KEPT GOING. engine/stop_gate.py is a Claude Code `Stop` hook, so for
+        # every other client the continuous-mode verdict is advisory and continuing after a
+        # finding is the client's OWN obligation. Measured 2026-11-14: 0 of the 59 sessions in
+        # hunt-memory/pacing/stop_gate.json came from a non-Claude client, i.e. the gate has
+        # never once run for one.
+        "stop_hook": False,
         "skills": "read skills/<name>/SKILL.md as a file",
         "commands": "read commands/<name>.md and follow it",
-        "subagents": "whatever parallel mechanism this client has; else work serially",
+        # Names the FILE, because `scripts/sync_clients.py` deploys roles only into
+        # `.claude/agents` — this client gets no role registry, so without this line the
+        # doctrine, the forbidden-action list and the handback-citation rule reach none of
+        # its lanes once they stopped being pasted into every brief.
+        "subagents": ("whatever parallel mechanism this client has; else work serially — "
+                      "read `agents/roles/<role>.md` as a file first, it carries the "
+                      "role's obligations and the crit/high doctrine"),
         "browser": "Playwright MCP, gated by whatever wrapper this client has; `bbcurl` otherwise",
         "notes": [
             "unrecognised client: assume nothing is enforced for you and send through bbcurl only",
@@ -76,10 +96,47 @@ PROFILES: dict[str, dict] = {
 
 ALIASES = {
     "claude-code": "claude", "claudecode": "claude", "opus": "claude", "sonnet": "claude",
+    # By NAME, not only by process. `_PROC_MARKERS` below recognises a live `grok` process,
+    # but an explicit argument took a different path: `_norm("grok")` returned "" and
+    # `profile("grok")` fell through to `detect()`, so asking about Grok's row FROM a Claude
+    # session printed CLAUDE's row — crew 3 and "you do not fire requests", neither of which
+    # is Grok's. That is the 01a1d946 incident surviving in the by-name path, and it also made
+    # `scripts/decision_replay.py --client grok` replay as claude and return a clean parity
+    # diff for the wrong reason. Measured 2026-11-17.
+    "grok": "generic", "grok-build": "generic", "grokbuild": "generic", "xai": "generic",
 }
 
+# Matched as an exact argv TOKEN — a token's basename, or one whole path component of it —
+# never as a bare substring of the command line.
+#
+# The bare substring `claude` was a false-positive machine, because this workspace is full of
+# the word: the repo answers to `/home/qvex/security-research/Claude-BugHunter` (a symlink kept
+# for the old name), every Claude scratchpad lives under `/tmp/claude-1000/...`, and shared
+# config sits in `~/.claude/`. `_ancestry()` reads twelve ancestor command lines, so ONE of
+# them carrying any of those strings flipped the row. Measured 2026-11-14 on Grok session
+# 01a1d946: `cbh client` answered "Claude Code (claude) — detected by process ancestry" to a
+# Grok Build session, which then ran a 3-worker crew instead of 6 and was told "you do NOT
+# fire requests" — neither of which is Grok's row. Same bug class as the grep-token traps:
+# a short token matching inside a longer word.
+#
+# Exact-component matching keeps every near-miss out: component `.claude` != `claude`,
+# `claude-1000` != `claude`, `Claude-BugHunter` != `claude`, basename `cli.py` != `claude`.
 _PROC_MARKERS = (
     ("claude", "claude"),
+    ("claude-code", "claude"),
+    # Grok Build's process is literally named `grok`. It takes the `generic` row: crew 6,
+    # may send, no hooks promised. Recognising it here is what keeps the ancestry backstop
+    # from guessing `claude` for it.
+    ("grok", "generic"),
+)
+
+# Clients that announce themselves in the environment but are NOT Claude Code. Checked
+# BEFORE `CLAUDECODE`, for the reason `runtime/playwright-mcp.mjs` already documents:
+# "Grok Build's compat layer leaks CLAUDECODE=1 into MCP, so GROK_AGENT / GROK_SESSION_ID
+# still win." `runtime/inline-gate.mjs` resolves in that same order. This table is what
+# makes `cbh client` agree with them instead of contradicting them.
+_ENV_MARKERS = (
+    (("GROK_AGENT", "GROK_SESSION_ID"), "generic"),
 )
 
 
@@ -90,6 +147,9 @@ def _norm(name: str) -> str:
 
 
 def _from_env() -> str:
+    for names, client in _ENV_MARKERS:
+        if any(os.environ.get(n) for n in names):
+            return client
     if os.environ.get("CLAUDECODE") == "1":
         return "claude"
     return ""
@@ -113,11 +173,29 @@ def _ancestry() -> list[str]:
     return out
 
 
+def _tokens(line: str) -> set[str]:
+    """Every argv token's basename plus each of its path components, for one command line.
+
+    `/usr/bin/claude --flag` -> {"/usr/bin/claude", "usr", "bin", "claude", "--flag"}
+    `/tmp/claude-1000/x/p.py` -> {..., "tmp", "claude-1000", "x", "p.py"}  (no bare "claude")
+    """
+    out: set[str] = set()
+    for tok in line.split():
+        out.add(tok)
+        out.add(tok.rsplit("/", 1)[-1])
+        out.update(part for part in tok.split("/") if part)
+    return out
+
+
 def _from_proc() -> str:
-    lines = _ancestry()
-    for marker, name in _PROC_MARKERS:
-        if any(marker in line for line in lines):
-            return name
+    # Nearest ancestor first: `_ancestry()` walks this process up the ppid chain, so the
+    # client's own process line is found before anything that merely launched it. Matching
+    # marker-first across all twelve lines let a far ancestor outvote the real client.
+    for line in _ancestry():
+        toks = _tokens(line)
+        for marker, name in _PROC_MARKERS:
+            if marker in toks:
+                return name
     return ""
 
 
@@ -154,6 +232,11 @@ def may_send(name: str = "") -> bool:
     return bool(profile(name)["orchestrator_may_send"])
 
 
+def stop_hook(name: str = "") -> bool:
+    """Does a Stop hook keep this client hunting, or must the client keep itself hunting?"""
+    return bool(profile(name).get("stop_hook"))
+
+
 def gates_enforced(name: str = "") -> bool:
     return bool(profile(name)["gates_enforced"])
 
@@ -167,12 +250,20 @@ def brief(name: str = "") -> str:
     gates = ("PreToolUse hooks are live: crew-gate, skill-gate, agent-gate can deny you"
              if p["gates_enforced"] else
              "no PreToolUse hooks for you: scope and pacing bind via bbcurl and the MCP inline gate")
+    keep_going = ("the Stop hook keeps you hunting: a banked Medium+ does not end the "
+                  "session, engine/stop_gate.py decides"
+                  if p.get("stop_hook") else
+                  "NO Stop hook for you, so NOTHING keeps the hunt alive but you: after every "
+                  "wave re-run `cbh autohunt` and obey its `Stop gate:` line, and never end the "
+                  "session on a finding — bank it, confirm it, take the next vector. Only the "
+                  "operator ends a hunt")
     lines = [
         f"CLIENT: {p['label']} ({p['client']}) — detected by {p['detected_by']}",
         f"  crew          {p['crew']} concurrent workers by default "
         f"(\"hunt_agents\" in profile.json overrides it)",
         f"  sending       {send}",
         f"  gates         {gates}",
+        f"  continuing    {keep_going}",
         f"  skills        {p['skills']}",
         f"  commands      {p['commands']}",
         f"  subagents     {p['subagents']}",

@@ -296,6 +296,91 @@ done
 
 ---
 
+## A 404 Does Not Close The Lead
+
+A direct read answering `404` is routinely written up as "no access" and the lead is closed. It
+is not evidence of absence: the same object can be fully readable through a **nested reference**,
+because the server resolves that reference itself and copies the result into an object you own.
+
+**The shape.** A create/update call takes a field naming another object — `reply`, `parent`,
+`parent_id`, `in_reply_to`, `source_id`, `copy_from`, `template_id`, `duplicate_of`, `import_from`.
+The handler looks that object up to populate the new one, and the lookup is scoped by the
+reference's own key instead of by the caller's tenant. You never touch a route belonging to the
+victim, so route-level authorization never fires.
+
+**Worked example — CVE-2026-126338 (Gitea, High, fixed 28.4.0).** `createCodeComment` queried
+comments by `ReviewID`, `Line`, `TreePath` and `Type` and by **nothing else** — no `IssueID`, no
+`RepoID` — then copied the first match's `Patch` and `CommitSHA` into the attacker's own comment.
+The web form field is `reply`; the leaked JSON fields are `diff_hunk` and `commit_id`. A direct API
+read of that same review answers the attacker `404`.
+
+**The oracle, on an id you already hold.** Three states, and the middle one is the useful one:
+
+| response | meaning |
+|---|---|
+| `200` with foreign content in your object | hit |
+| `500` | the referenced object exists but your path/line/key does not match inside it |
+| `404` | no such reference id |
+
+A `500` is therefore a positive existence signal, not an error — the same inversion as
+`404-can-carry-zero-information`.
+
+**DO NOT ENUMERATE THE REFERENCE ID.** Two requests per guess, and in the worked example the ids
+are one instance-wide auto-increment sequence that does not reveal which tenant an id belongs to,
+so a sweep cannot be aimed at a chosen victim and is pure ban bait. This vector is for an id you
+**already have** from your own surface: an export, a share URL, a denial body, a notification, a
+JS bundle, a sibling tenant you own.
+
+**Where to look first.** Any field whose name implies the server will fetch something; any
+create call whose response contains data you did not send; a `diff`, `excerpt`, `preview`,
+`snippet` or `quote` field on a child object.
+
+**Forensic marker, if you have DB access on your own instance:** a child row whose parent id
+belongs to a different parent scope. That is the detection rule an operator can run.
+
+**SKIP** — `hunt-graphql` when the nested reference is a global id or a `node()` argument;
+`hunt-business-logic` when the copied value is a price or a quantity rather than someone else's
+content.
+
+---
+
+## Parameters The Server Put There Itself
+
+A parameter you did not send is trusted more than one you did, because the code that reads it
+back assumes it wrote it. Census every parameter that appears **only** in a `Location` header —
+never in your request — and re-send it on the route the redirect pointed at.
+
+**Worked example — CVE-2026-123009 (Gitea, High 7.7, fixed 28.4.0).** The submit-to-fork flow
+redirects a user who can read but not write into their own fork's editor, and the server's own
+redirect carries `?from_base_branch=<branch>` (`services/context/repo.go:241-244`). The handler
+reads it as `ctx.FormString("from_base_branch")` (`routers/web/repo/editor.go:136`) — no binding,
+no validator. A non-empty value sets `commitToNewBranch`, which skips the protected-branch guard
+and leaves only `CanMaintainerWriteToBranch`, and that resolves against **the fork the request
+targets** — attacker-owned — so it short-circuits true. The value then drives a base→fork push.
+The attacker never touches a route on the base repository.
+
+**The asymmetry to look for in source.** In the same codebase `new_branch_name` carries
+`binding:"GitRefName;MaxSize(100)"`, while `from_base_branch` is not a form-struct field at all,
+so it never enters binding. A parameter that exists only in a redirect is exactly the parameter
+nobody wrote a validator for.
+
+**A 400 is not a failure.** In the disclosed case the push runs *before* the stale-commit check,
+so a request rejected with `400` has already created and populated the branch. Never read a 4xx
+as "the mutation did not happen" — go and read the object.
+
+**How to census it.** From the response corpus, not by sending more: diff each `Location` value
+against the query you sent and list the parameters that are new. Then, for each, re-send it on
+the redirect target while your grant on the *source* object is absent or revoked. The paid
+question is not "is it reflected" but "who was it checked against".
+
+**Declare it** `**Class:** redirect-param` so the funnel ranks it as the authorization failure it
+is rather than at the open-redirect band.
+
+**SKIP** — `hunt-open-redirect` when the parameter controls where the browser goes rather than
+which object the server reads; `hunt-cspt` when the value lands in a same-origin fetch path.
+
+---
+
 ## Gate 0 Validation
 
 Before writing the report, answer all three:

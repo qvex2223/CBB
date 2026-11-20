@@ -68,6 +68,21 @@ def items(project_dir: Path, tiers: tuple[str, ...] = TIERS) -> List[Path]:
     return out
 
 
+# Markdown names that describe the FILE's role rather than naming the item. In the
+# folder-per-item layout the folder carries the slug and the markdown inside is called
+# something like this, so none of these may become an item's name.
+#
+# A structural rule — "parent is not a tier directory, so the parent is the slug" — was
+# tried first and is wrong: a flat item does not always sit in a directory this module
+# recognises (a test fixture writes `<tmpdir>/some-finding-slug.md`, and a new tier would
+# behave the same), and it was then named after its directory. The file's own name is the
+# only thing that says which of the two layouts it is in.
+GENERIC_ITEM_NAMES = frozenset({
+    "readme", "finding", "findings", "lead", "leads", "primitive", "primitives",
+    "index", "notes", "note", "writeup", "write-up", "report", "summary",
+})
+
+
 def item_name(path) -> str:
     """The slug that names an item, for a flat file and for a folder-form one alike.
 
@@ -77,8 +92,17 @@ def item_name(path) -> str:
     ranked and briefed as "README" with the class guessed from the word. The folder is
     what carries the slug in that layout, so read the name from there. Measured
     2026-11-13.
+
+    Forgiving only `readme` was not enough, because the layout's fourth form is "the single
+    `.md` in the folder" and it may be called anything — `finding.md` is what the
+    one-folder-per-finding habit produces. Measured 2026-11-14 on a six-lane wave:
+    `findings/www-android-deeplink-callback-javascript-scheme-xss/finding.md` and
+    `primitives/chat-prod-unauth-support-chat-readable-by-client-chosen-basketuid/finding.md`
+    were BOTH named `finding`, so two distinct refuter lanes printed as one repeated record
+    and a reader could not tell three lanes from two. Same on mail_vk. Hence
+    `GENERIC_ITEM_NAMES` rather than one word.
     """
     p = Path(str(path))
-    if p.stem.lower() == "readme" and p.parent.name:
+    if p.stem.lower() in GENERIC_ITEM_NAMES and p.parent.name:
         return p.parent.name
     return p.stem

@@ -53,9 +53,18 @@ scrubs subscriber identity out of every file it writes (`engine/responses.py::sc
 shipping project data to a vendor cloud would walk around that for no gain. `--no-open` keeps it
 from trying to launch a browser on a box with no display.
 
-**One Caido project per engagement.** The MCP server hands an agent the whole project history, so
-two programs sharing a project means one program's traffic is readable while hunting the other.
-`caido_create_project` / `caido_select_project` are not gated and are cheap — use them.
+**One Caido project for every programme: `bughunter`** (operator directive 2026-11-18). The
+per-engagement rule that stood here was never enforced: on 2026-11-18 the instance held
+`standoff365-wildberries` and `standoff365-konsol`, wildberries was current, and the wolt and
+1password hunts had filed into it. Both were deleted and `bughunter` created; the free licence
+holds two projects (`createProject` answered `PermissionDeniedUserError` until one was deleted).
+`engine/caido_project.py --ensure` re-selects it, and `runtime/playwright-mcp.mjs`, `cbh
+hunt-start` and the hunt-arm hook call it. Do not create or select another project.
+
+Because the history is shared, **every read filters by host**: `caido_list_requests` with HTTPQL
+`req.host.cont:"<programme domain>"` (add `and req.path.cont:"/api/"` and the like). An unfiltered
+listing shows another programme's traffic, and evidence is cited by Caido request id, never by
+"the last request".
 
 ## Finishing the login (operator)
 
@@ -125,3 +134,13 @@ Tests: `python3 -m unittest tests.test_mcp_gate` (44 cases, 25 of them Caido).
 `engine/scope.py` stays authoritative — it is the one that resolves a host and checks it against a
 program's netblocks. A Caido scope preset is a convenience for filtering history, never an
 authorization to send.
+
+## bbcurl through Caido (`--bb-caido`, 2026-11-20)
+
+`CBH_PROJECT=<eng> bbcurl --bb-caido ...` (or `CBH_BBCURL_CAIDO=1` for a whole lane) sends the gated request through Caido at `127.0.0.1:8080`, so it appears in Caido's history beside the browser lane's traffic and can be replayed (`caido_send_request`), diffed or exported as evidence. The scope gate, pacing, mandatory headers and audit run exactly as without the flag. The proxy is appended after the URL list has been scope-checked.
+
+It refuses rather than falling back to a direct connection when:
+- Caido is not listening (start it with `scripts/caido-up.sh`);
+- a `--resolve`/`--connect-to` pin would not hold. Through a proxy, Caido resolves the hostname itself, so the name must already resolve on this box to the pinned address. That is true for a lab name mapped in `/etc/hosts`; it is false for a name-gated vhost pinned to a netblock IP, which has to stay direct.
+
+Use it for the requests that carry a proof (the PoC arm and its controls), not for bulk sweeps, so Caido's history stays readable. Find them later with HTTPQL such as `req.host.eq:"<host>"`.

@@ -139,9 +139,11 @@ CBH_PROJECT=$P bbcurl -sD- -o /dev/null \
 connection is shared, so the response lands on **someone else's** request and sends that
 user to your host with their session in flight. It is also the rung where the test stops
 being yours — it touches another user and can desynchronise a shared connection pool.
-**Do not fire it.** Write it to `blocked-tests/` with the rung-3 capture attached and put
-the approval request on `cbh queue`; rungs 1-3 on your own connection are already a
-report, and the write-up says rung 4 is the demonstrated-but-not-fired consequence.
+**Do not fire it** — this is one of the four that still park (`cbh autonomy`). Write it to
+`blocked-tests/` with the rung-3 capture attached and a declaration line,
+`**Park:** other-user-data`, so `cbh leads` and `cbh queue` both hold it back; rungs 1-3 on
+your own connection are already a report, and the write-up says rung 4 is the
+demonstrated-but-not-fired consequence.
 
 **Chain:** needs `crlf-into-upstream-header`, `header-count-increases` · gives
 `split-response-controlled`, `cross-user-redirect-candidate`

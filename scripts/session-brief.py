@@ -108,7 +108,8 @@ def main() -> int:
             lines.append(f"CONTINUOUS: a proven Medium+ is banked and the sweep goes on; "
                          f"only you end this hunt ({cont['source']}, "
                          f"{max_blocks(project)} pushes max). Accounts are self-service — "
-                         f"blocked registration goes to blocked-tests/, not to you.")
+                         f"a blocked registration is one vector, not an ask: it goes to "
+                         f"blocked-tests/ with a `**Park:**` line, not to you (`cbh autonomy`).")
         else:
             lines.append(f"STOP GATE: default — a proven Medium+ ends the hunt "
                          f"({cont['source']}). `stop_gate.py --continuous on` to sweep.")

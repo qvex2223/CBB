@@ -106,3 +106,6 @@ Targets/*/*/.secrets/
 /co-handshake.json
 /cbh-h16-paths.json
 /need-status.txt
+
+# Engagement-specific replay baselines and plans (lead/primitive titles of private programmes). Never publish.
+docs/plans/

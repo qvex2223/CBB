@@ -35,8 +35,25 @@ class LeadQueue(unittest.TestCase):
             files = [r["file"] for r in q["open"]]
             self.assertEqual("primitives/idor-order-read.md", files[0])
             self.assertIn("leads/route-existence-oracle.md", files)
-            self.assertIn("seller-session", q["needs_account"])
+            # Operator directive 2026-11-14: an account the engagement does not hold is the
+            # lane's first step (`cbh identity new`), not a bucket the operator owns. It
+            # stays workable and carries the mark.
+            self.assertEqual({}, q["needs_account"])
+            self.assertIn("leads/seller-thing.md", files)
+            seller = next(r for r in q["open"] if r["file"] == "leads/seller-thing.md")
+            self.assertEqual("seller-session", seller["register_first"])
             self.assertEqual(1, q["closed"])
+
+    def test_a_programme_that_forbids_registration_still_owns_the_account(self):
+        # `"self_registration": false` is the operator's own per-programme opt-out, so it
+        # survives the directive.
+        with tempfile.TemporaryDirectory() as t:
+            root, e = _eng(t)
+            (e / "profile.json").write_text(json.dumps({"self_registration": False}))
+            with mock.patch.object(LQ, "_targets_root", lambda: root):
+                q = LQ.scan(e)
+            self.assertIn("seller-session", q["needs_account"])
+            self.assertNotIn("leads/seller-thing.md", [r["file"] for r in q["open"]])
 
     def test_close_rewrites_status(self):
         with tempfile.TemporaryDirectory() as t:
@@ -165,10 +182,35 @@ class StalledVerdict(unittest.TestCase):
             self.assertIn("1 stalled (counted in workable)", out)
             self.assertIn("stalled", out.split("Close every lane")[1])
 
+    def test_a_blocked_banner_alone_no_longer_holds_a_lead_back(self):
+        """The 2026-11-11 queue-emptying, made impossible rather than reversible.
+
+        Seven leads were closed `--as blocked` because six Playwright hunters hung on one
+        browser profile, and the whole paying class left the ledger. A `blocked` banner with
+        no `**Park:**` declaration now keeps the lead workable and says so on the row.
+        """
+        with tempfile.TemporaryDirectory() as t:
+            root, e = _eng(t)
+            f = e / "leads" / "route-existence-oracle.md"
+            LQ.close(str(f), "blocked", "6 Playwright hunters hung ~20min again")
+            with mock.patch.object(LQ, "_targets_root", lambda: root):
+                q = LQ.scan(e)
+                out = LQ.render(q, 12)
+            self.assertEqual(0, q["blocked"])
+            self.assertEqual(1, q["undeclared_block"])
+            self.assertIn("leads/route-existence-oracle.md", [r["file"] for r in q["open"]])
+            self.assertIn("no `**Park:**` declaration", out)
+
     def test_reopen_puts_a_mis_marked_blocked_lead_back_in_the_queue(self):
         with tempfile.TemporaryDirectory() as t:
             root, e = _eng(t)
             f = e / "leads" / "route-existence-oracle.md"
+            # Since 2026-11-14 a BLOCKED banner holds a lead back only when the file DECLARES
+            # one of `cbh autonomy`'s reasons, so the declaration is what this test has to
+            # mis-mark in order to still be testing `reopen`. The 2026-11-11 incident itself
+            # — a hung browser lane written as `blocked` — can no longer empty the queue at
+            # all: see `test_a_blocked_banner_alone_no_longer_holds_a_lead_back`.
+            f.write_text(f.read_text() + "\n**Park:** other-user-data\n")
             LQ.close(str(f), "blocked", "6 Playwright hunters hung ~20min again")
             with mock.patch.object(LQ, "_targets_root", lambda: root):
                 held = LQ.scan(e)
@@ -176,6 +218,7 @@ class StalledVerdict(unittest.TestCase):
             self.assertNotIn("leads/route-existence-oracle.md", [r["file"] for r in held["open"]])
 
             self.assertEqual(0, LQ.main(["reopen", str(f), "--note", "our lock, not the target"]))
+            f.write_text(f.read_text().replace("**Park:** other-user-data\n", ""))
             with mock.patch.object(LQ, "_targets_root", lambda: root):
                 back = LQ.scan(e)
             self.assertEqual(0, back["blocked"], "the displaced BLOCKED banner still held it back")

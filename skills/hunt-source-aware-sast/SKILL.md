@@ -293,3 +293,39 @@ HTTP request for this class only. In the report body, always include:
   before it's reportable.
 - **`report-writing`** — Dependency-CVE findings still go through the normal
   report format; only the PoC-evidence requirement in Q1 is substituted.
+
+---
+
+## Repeated Sampling — Offline Only, N = 3
+
+One analysis pass over a bundle misses sinks it has no reason to miss. Three passes over the same
+bytes find more, and they cost **zero requests**, because the bytes are already on disk.
+
+**Measured, by the people selling it** (DepthFirst, 2 Nov 2026, 30 detection tasks of their own
+`dfbench`): one run ~52% recall, five runs ~71%, fifteen runs ~80% at roughly $13 a task. Carry
+the two caveats with the number — it is vendor self-benchmarking on a benchmark the vendor wrote,
+and recall **plateaus**: their strongest model flattened after about three runs, and by the fifth
+the aggregator was "distracted by too much information" and recall stopped improving. So N is
+capped, not maximised.
+
+**The method.**
+
+1. Run the source pass N = 3 times over the same artifact set — bundle, `.js.map`, exported
+   corpus, decompiled APK — without carrying the previous pass's conclusions into the next.
+2. Aggregate: merge the candidate lists, collapse duplicates on (file, sink, controllable input),
+   and score each survivor 0-100 on how much of the chain the passes actually agreed on —
+   attacker-controlled input, a path from it to the sink, and no guard in between.
+3. Keep what clears the cutoff; log the rest as rejected with its score, so the next pass over the
+   same bundle does not re-propose it. A candidate that one pass out of three proposed and cannot
+   name its input is noise, not a lead.
+
+**Where this is forbidden.** Against a live host. Three sampled runs of a *request* pass are three
+times the traffic for the same surface, and this workspace has one global `flock`'d request budget
+per engagement — so sampling does not find more, it queues, and an injection-shaped probe repeated
+across runs is what bans the source IP. Repeated sampling here means repeated **reading**.
+
+**SKIP** — `api-recon` for mapping the surface the bundle describes (it has its own one-line note
+on this); any `hunt-*` skill for the class once a candidate survives aggregation — a 0-100 score is
+a queue position, never a finding, and the sink still needs the browser or the request that proves
+it.
+

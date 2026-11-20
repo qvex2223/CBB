@@ -58,8 +58,10 @@ Three artefacts, three different actions:
 ## Standing rules
 
 - an anomaly row is an **open thread**, never a result
-- a random UUID proves nothing for `authz-before-lookup` — you need a real
-  foreign id; without one, log under `blocked-tests/`, do not close the thread
+- a random UUID proves nothing for `authz-before-lookup` — you need a real id the current
+  session does not own, which is a SECOND identity of our own (`cbh identity new <url>`
+  twice), never a real user's. Registering it is the lane; park it only if the programme
+  forbids a second account, and then declare `**Park:** other-user-data`
 - never write a report from this step's output alone
 
 ## Where to write it

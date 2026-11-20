@@ -42,6 +42,17 @@ def _run(ev, cwd, **env):
     # all, which client() reads as `generic` — a client the gate leaves alone — so pin
     # Claude here instead of inheriting whatever launched the suite.
     e.pop("CBH_AGENT", None)
+    # `_from_env()` in engine/client.py checks GROK_AGENT / GROK_SESSION_ID BEFORE
+    # CLAUDECODE, by design: Grok Build's compat layer leaks CLAUDECODE=1, so the Grok
+    # markers have to win there. The consequence here is that popping CBH_AGENT and
+    # setting CLAUDECODE=1 does NOT pin Claude while the suite is launched from a Grok
+    # process — the inherited marker still decides, the gate correctly leaves that client
+    # alone, and the assertion below fails for an environmental reason. Measured
+    # 2026-11-17 from inside Grok Build: 13 failures and 3 errors across test_crew,
+    # test_crew_gate, test_control_guard and test_mcp_gate, with the same tree green under
+    # Claude Code. A test must pin the row it asserts.
+    e.pop("GROK_AGENT", None)
+    e.pop("GROK_SESSION_ID", None)
     e["CLAUDECODE"] = "1"
     e.update(env)
     p = subprocess.run([sys.executable, str(GATE)], input=json.dumps(ev), text=True,
@@ -103,6 +114,11 @@ class Decisions(unittest.TestCase):
                  HOME=home)
         e.pop("CBH_AGENT_ROLE", None)
         e.pop("CBH_AGENT", None)
+        # Same pin as `_run` above, and for the same reason: GROK_AGENT / GROK_SESSION_ID
+        # outrank CLAUDECODE in engine/client.py's `_from_env()`, so without this the gate
+        # leaves a Grok-launched suite alone, prints nothing, and `json.loads("")` raises.
+        e.pop("GROK_AGENT", None)
+        e.pop("GROK_SESSION_ID", None)
         e["CLAUDECODE"] = "1"
         out = subprocess.run([sys.executable, str(GATE)], input=json.dumps(BB), text=True,
                              capture_output=True, cwd=self.eng, env=e).stdout

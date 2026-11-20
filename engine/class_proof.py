@@ -354,6 +354,53 @@ def _idor(ctx: Ctx) -> tuple[bool, str]:
                    "credential — so one artifact holds both answers")
 
 
+def _secret_exposure(ctx: Ctx) -> tuple[bool, str]:
+    """A leaked credential is proven by USING it, never by finding it.
+
+    The oracle is two arms of ONE PoC against the SAME url: the arm carrying the credential
+    answers 2xx, the arm without it does not. Anything less is a string in a response.
+
+    Why this rule exists. ARTEX reported a planted fake secret as genuine on 30 of 120 tasks
+    (arXiv 2611.07611) — a secret that has not been used is not evidence that it is real, let
+    alone that it grants anything. And note the shape this must NOT accept: `cbh refute`'s
+    `credentials-removed` control passes by construction on an unauthenticated-exposure claim,
+    because the request carried no credential in the first place. That control shows the endpoint
+    answers WITHOUT the secret, which is the opposite of this proof.
+
+    The same-url guard is load-bearing: a 2xx on one route beside a 401 on another proves
+    nothing about the credential, only that two routes differ.
+    """
+    for spec, group in zip(ctx.specs, ctx.result_groups()):
+        steps = spec.get("steps")
+        steps = list(steps) if isinstance(steps, list) and steps else [spec]
+        # Index pairing is only honest when the run recorded one result per step.
+        if len(steps) != len(group):
+            continue
+        by_url: Dict[str, Dict[str, list]] = {}
+        for st, res in zip(steps, group):
+            url = str(st.get("url") or "")
+            code = res.get("status")
+            if not url or not isinstance(code, int):
+                continue
+            arm = "with" if _identity_of(st) else "without"
+            by_url.setdefault(url, {"with": [], "without": []})[arm].append(code)
+        for url, arms in by_url.items():
+            authed = [c for c in arms["with"] if 200 <= c < 300]
+            denied = [c for c in arms["without"] if not 200 <= c < 300]
+            if authed and denied:
+                return True, (f"the credential authenticated on one url: {authed[0]} carrying "
+                              f"it against {denied[0]} without it, {url[:60]}")
+    return False, ("the secret was found, not used. This class is proven by two arms of ONE "
+                   "spec against the SAME url: a step carrying the credential in an identity "
+                   f"header ({', '.join(IDENTITY_HEADERS[:4])}, ...) answering 2xx, and a step "
+                   "without it answering anything else. A planted or revoked key looks "
+                   "identical to a live one until it is used — and `cbh refute`'s "
+                   "`credentials-removed` control is NOT this proof: it shows the endpoint "
+                   "answers without the secret, which is the opposite claim. If the credential "
+                   "travels as a query parameter rather than a header, put the header arm in "
+                   "the spec anyway or declare the class the finding actually is")
+
+
 def _csrf(ctx: Ctx) -> tuple[bool, str]:
     docs = [p for p in ctx.files if p.suffix.lower() in (".html", ".htm")]
     if docs:
@@ -401,6 +448,10 @@ RULES: Dict[str, tuple[str, Callable[[Ctx], tuple[bool, str]]]] = {
     "idor": ("two identities in one artifact", _idor),
     "csrf": ("a cross-origin PoC document", _csrf),
     "open-redirect": ("a hop to another host", _open_redirect),
+    # The class already existed everywhere — CATALOG, CLASS_WORDS, skill_map, a 300 000 band —
+    # and had no oracle, so `cbh triage` graded it as "not checked". It is the one class whose
+    # artifact is most often a grep hit rather than a request.
+    "secret-exposure": ("the credential authenticating, not its presence", _secret_exposure),
 }
 
 

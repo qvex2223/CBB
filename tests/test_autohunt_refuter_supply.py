@@ -158,6 +158,43 @@ class ThePickedRole(unittest.TestCase):
         self.assertEqual(role, "refuter")
         self.assertIn("PASSing PoC", why)
 
+    def test_a_finding_awaiting_its_kill_attempt_also_leads_the_wave(self):
+        """The second half of "not fully confirmed" must reach the HEADER, not just the mix.
+
+        `refuter_share` hands the whole wave to confirmation for either half, but the lead
+        role was picked from `claimed_but_unproven` alone. Measured on the 2026-11-14
+        decision replay: `tumar/freedom` printed `lead role deep-hunter — 68 workable
+        lead(s)/primitive(s) in the queue` above three refuter briefs, so the header
+        contradicted every brief under it.
+        """
+        role, why = autohunt.pick_role(
+            {}, {"open": [{"file": "p.md"}] * 68},
+            unrefuted_findings=[{"file": "findings/a.md", "tier": "findings"},
+                                {"file": "findings/b.md", "tier": "findings"}])
+        self.assertEqual(role, "refuter")
+        self.assertIn("no current kill attempt", why)
+        self.assertIn("2 finding", why)
+
+    def test_an_unproven_claim_still_outranks_a_finding_awaiting_refutation(self):
+        role, why = autohunt.pick_role(
+            {"claimed_but_unproven": [{"file": "f.md"}]}, {},
+            unrefuted_findings=[{"file": "findings/a.md", "tier": "findings"}])
+        self.assertIn("PASSing PoC", why)
+
+    def test_a_never_attacked_BACKLOG_claim_does_not_take_the_header(self):
+        """Positive control: the one-third cap exists so 400 old primitives cannot.
+
+        Only the findings tier is confirm-first. A primitive that never faced an arm is
+        backlog, and backlog never outranks workable leads.
+        """
+        role, _ = autohunt.pick_role({}, {"open": [{"file": "p.md"}]},
+                                     unrefuted_findings=[])
+        self.assertEqual(role, "deep-hunter")
+
+    def test_the_default_keeps_every_existing_caller_working(self):
+        role, _ = autohunt.pick_role({}, {"open": [{"file": "p.md"}]})
+        self.assertEqual(role, "deep-hunter")
+
     def test_an_open_queue_outranks_a_never_attacked_claim(self):
         """Positive control: hunting is still the default when there is work."""
         role, _ = autohunt.pick_role({"unrefuted": [{"file": "p.md"}]},
@@ -232,11 +269,29 @@ class TheLanesAWaveActuallyEmits(_Eng):
             self.write(f"primitives/p{i:02d}.md")
         self.assertEqual(self._roles(self._wave(slots=6))["refuter"], 2)
 
-    def test_many_unproven_findings_still_leave_a_hunter_lane(self):
-        """The mirrored bug: 11 unproven claims must not empty the wave of hunters."""
+    def test_many_unproven_findings_take_the_whole_wave(self):
+        """Operator directive 2026-11-14 replaced the hunter floor with confirm-first.
+
+        This test used to assert the mirror of the 2026-11-12 bug: 11 unproven claims had to
+        leave one hunter lane (`refuter=5, deep-hunter=1`), so a pile of unproven claims could
+        not empty the wave. The directive — "если даже нашёл, пусть просто дальше продолжает
+        искать, но уже после того как полностью подтвердил находку" — inverts that priority:
+        an unproven claim cannot be submitted, so finishing it outranks opening new surface,
+        and the wave may go entirely to confirmation.
+
+        The floor is NOT gone, it moved: it still applies when nothing is unconfirmed
+        (`test_a_confirmed_hunt_still_guarantees_a_hunter_lane`), and the never-attacked
+        BACKLOG still gets only a third of the wave, so 400-odd old primitives cannot swallow
+        every wave forever.
+        """
         w = self._wave(slots=6, unproven=11)
-        self.assertEqual(self._roles(w)["refuter"], 5)
-        self.assertEqual(self._roles(w)["deep-hunter"], 1)
+        self.assertEqual(self._roles(w)["refuter"], 6)
+        self.assertEqual(self._roles(w).get("deep-hunter", 0), 0)
+
+    def test_a_confirmed_hunt_still_guarantees_a_hunter_lane(self):
+        """With nothing unconfirmed, the backlog may never take the last slot."""
+        w = self._wave(slots=6, unproven=0)
+        self.assertGreaterEqual(self._roles(w).get("deep-hunter", 0), 1)
 
     def test_an_unproven_claim_is_briefed_before_a_never_attacked_one(self):
         self.write("primitives/oracle.md")
@@ -274,7 +329,11 @@ class TheLanesAWaveActuallyEmits(_Eng):
             self.write(f"primitives/p{i}.md")
         w = self._wave(slots=6, open_items=0, hosts=[f"h{i}.example.com" for i in range(6)])
         self.assertEqual(self._roles(w)["refuter"], 2)
-        self.assertEqual(self._roles(w)["scout"], 4)
+        # One census lane carrying every host, not one lane per host
+        # (tests/test_autohunt_census_batch.py): the census is not displaced, it is batched.
+        scouts = [b for b in w["briefs"] if b["role"] == "scout"]
+        self.assertEqual(len(scouts), 1)
+        self.assertEqual(scouts[0]["hosts"], [f"h{i}.example.com" for i in range(6)])
 
     def test_nothing_unrefuted_leaves_the_wave_as_it_was(self):
         """Positive control: with every claim attacked, the wave is all hunters."""

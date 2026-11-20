@@ -538,6 +538,99 @@ def untried(project_dir: Path, limit: int = 5) -> List[Dict]:
     return out[:limit]
 
 
+# (scope.md path, its mtime_ns, host) -> is the host IN-SCOPE. Process-scoped
+# memo for the resolve-gate in `_scope_filter`; see the note there.
+_SCOPE_MEMO: Dict[tuple, bool] = {}
+
+
+def _scope_filter(project_dir: Path, limit: int = 6):
+    """Predicate: may this engagement's hook advertise `host` as a lane?
+
+    `hosts/<host>.md` is written precisely to RECORD a verdict, including an
+    out-of-scope one, so the filename is not evidence of scope. Without this,
+    continuous mode listed `agw.kcell.kz` (195.47.255.8, outside every declared
+    netblock) under "hosts in scope with room left" minutes after the gate denied
+    it — observed 2026-11-13 on `rteam/activ`. A skilled worker re-resolves and
+    catches that; a Freeroam lane carries no methodology by design and would not.
+
+    Only `IN-SCOPE` passes: `UNVERIFIED` means the name matches but code cannot
+    prove the host belongs to the programme, and that is not an approval to test.
+    If no scope file is readable the predicate admits everything, which is the
+    previous behaviour — this function narrows a suggestion list, it is not the
+    gate that authorises a request (`engine/scope.py` is, on every send).
+    """
+    scope_md = project_dir / "scope.md"
+    if not scope_md.is_file():
+        return lambda _host: True
+    try:
+        from scope import _scope_from_md  # type: ignore
+        sc = _scope_from_md(str(scope_md))
+        stamp = scope_md.stat().st_mtime_ns
+    except Exception:  # noqa: BLE001
+        return lambda _host: True
+
+    # Dead names are the expensive case: `scope.resolve_host` retries
+    # `_RESOLVE_ATTEMPTS` times with a backoff, so one NXDOMAIN host costs
+    # multiples of its 5 s timeout, and an engagement whose recorded names have
+    # rotted (43 of 50 saved subfinder names were NXDOMAIN on one engagement)
+    # never reaches `limit` and therefore resolves every host file it has.
+    # `scripts/decision_replay.py` sweeps every engagement in one process and
+    # ran past 1500 s on the first two attempts at this fix. The budget bounds a
+    # single call; exhausting it EXCLUDES the remaining candidates rather than
+    # admitting them, so the failure direction stays "suggest less", never
+    # "suggest something unverified".
+    budget = [max(limit * 4, 24)]
+
+    def _candidates(host: str) -> List[str]:
+        """The stem, then the dotted reading of a dash-sanitised filename.
+
+        Some engagements store `hosts/api-nexuzhealth-be.md` rather than
+        `hosts/api.nexuzhealth.be.md`, so `Path.stem` is not a hostname and
+        matches no scope rule. Gating on the stem alone dropped all 6 suggested
+        hosts for that engagement (the one change the clean replay showed), so
+        try the dotted form too. Only the GATE uses the normalised name; the
+        caller still gets the stem back, because the vector ledger is keyed on
+        the filename and a worker re-resolves the name before its first request.
+        """
+        out = [host]
+        if "-" in host and "." not in host:
+            out.append(host.replace("-", "."))
+        return out
+
+    def ok(host: str) -> bool:
+        # One DNS answer per (scope file, host) per process. Without this the
+        # resolve-gate cost `next_hosts()` one lookup per `hosts/*.md` on every
+        # call: 6.0 s across 95 host files for one engagement, and
+        # `scripts/decision_replay.py` ran past its 600 s timeout replaying the
+        # whole corpus. The memo is deliberately process-scoped, so a long-lived
+        # process never caches a stale verdict across a `scope.md` edit (the
+        # mtime is part of the key) and each session re-resolves once.
+        key = (str(scope_md), stamp, host)
+        if key not in _SCOPE_MEMO:
+            cands = _candidates(host)
+            if not sc.ip_scope:
+                # A programme that published no netblocks cannot be resolve-gated:
+                # `verify(resolve=True)` returns UNVERIFIED for every host by
+                # design, and requiring IN-SCOPE there emptied `next_hosts` on 9 of
+                # 10 engagements in the replay (6 -> 0 each) while only the
+                # netblock-scoped one kept its list. For these, the name rules ARE
+                # the decision — the same one `bbcurl` enforces on every send — so
+                # take the cheap name-level check and spend no DNS at all.
+                _SCOPE_MEMO[key] = any(sc.reject_reason(c) is None for c in cands)
+                return _SCOPE_MEMO[key]
+            if budget[0] <= 0:
+                return False
+            budget[0] -= 1
+            try:
+                _SCOPE_MEMO[key] = any(
+                    sc.verify(c, resolve=True).get("verdict") == "IN-SCOPE" for c in cands)
+            except Exception:  # noqa: BLE001 — DNS/network layer; never block the hook
+                _SCOPE_MEMO[key] = False
+        return _SCOPE_MEMO[key]
+
+    return ok
+
+
 def next_hosts(project_dir: Path, limit: int = 6) -> List[str]:
     """Hosts in this engagement that still have somewhere to go.
 
@@ -548,13 +641,16 @@ def next_hosts(project_dir: Path, limit: int = 6) -> List[str]:
     hdir = project_dir / "hosts"
     if not hdir.is_dir():
         return []
+    in_scope = _scope_filter(project_dir, limit)
     try:
         from vectors import _path, load  # type: ignore
     except Exception:  # noqa: BLE001
-        return [f.stem for f in sorted(hdir.glob("*.md"))][:limit]
+        return [f.stem for f in sorted(hdir.glob("*.md")) if in_scope(f.stem)][:limit]
     out: List[str] = []
     for f in sorted(hdir.glob("*.md")):
         host = f.stem
+        if not in_scope(host):
+            continue
         try:
             if not _path(host).exists():
                 out.append(host)

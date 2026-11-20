@@ -446,7 +446,38 @@ More fields and grep recipes in [reference.md](reference.md).
 
 ---
 
+## Census the parameters the server adds to its own redirects
+
+An inventory built from requests misses the parameters the application invents. For every 3xx in
+the corpus, diff the `Location` value against the query that was sent and record the parameters
+that are **new**. They are a distinct surface: the code reading them back assumes it wrote them,
+so they frequently have no binding and no validator at all, while their hand-sent siblings on the
+same route do (CVE-2026-123009: `from_base_branch` was not a form-struct field, while
+`new_branch_name` carried `binding:"GitRefName;MaxSize(100)"`).
+
+Record each one as a `redirect-param` vector with the route the redirect pointed at, not the route
+that emitted it. This is a corpus diff — it costs no requests.
+
+**SKIP** — `hunt-idor` owns the exploitation of this class, including why a `400` does not mean
+the write did not happen; this phase only produces the inventory.
+
+---
+
 ## Additional resources
 
 - Grep recipes, `config.json` template, troubleshooting, hooks, parameter reverse engineering section J, site_map template: **[reference.md](reference.md)**
 - Reference script paths are in the [Scripts and gates](#scripts-and-gates) table
+
+---
+
+## Sample the bundle more than once
+
+Parameter and endpoint extraction from a bundle is cheap and lossy: a single pass misses routes it
+has no reason to miss. Run the extraction **three times** over the same bytes and merge, scoring
+each candidate on what the passes agreed about. Recall plateaus after about three, so three is the
+number. Zero requests, because the bytes are on disk.
+
+**SKIP** — `hunt-source-aware-sast` carries the method, the measured numbers and the rule that
+repeated sampling is **reading** only: never three sampled passes of a request against a live host,
+which is three times the traffic under one shared budget.
+

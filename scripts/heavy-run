@@ -36,6 +36,9 @@ cores=$(nproc); threads=$(( cores / 2 )); gb=$(( cap_mb / 1024 )); [ "$gb" -lt 1
 [ "$threads" -gt "$gb" ] && threads=$gb; [ "$threads" -lt 1 ] && threads=1
 export JAVA_TOOL_OPTIONS="-Xmx${xmx_mb}m ${JAVA_TOOL_OPTIONS:-}"
 export HEAVY_THREADS="$threads"
+# A wrapper that caps itself (scripts/jadx) must not nest a second scope inside
+# this one, so say out loud that a cap is already in force.
+export HEAVY_RUN_CAP_MB="$cap_mb"
 echo "heavy-run: cap ${cap_mb} MB (of $((avail_kb/1024)) MB free) · -Xmx${xmx_mb}m · threads ${threads}" >&2
 
 if systemd-run --user --scope --quiet -p MemoryMax=1G true >/dev/null 2>&1; then

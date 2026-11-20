@@ -64,6 +64,21 @@ QUESTION_RE = re.compile(
     r"why|how|what|which|where|when|can\s+i|do(?:es)?\s|is\s+there|explain|tell\s+me)",
     re.I)
 
+# Text the operator pasted (an advisory digest, a log, a report) is material, not an
+# order. Claude Code delivers it wrapped in <pasted_content id=…> … </pasted_content id=…>.
+# Measured 2026-11-20: a pasted security digest containing "recon" and "hunt-loop" armed
+# the stop gate on a prompt whose own words asked only for an opinion. Only the
+# operator's own words are read for arm/disarm intent; an unclosed block is cut to the end.
+_PASTE_BLOCK_RE = re.compile(
+    r"<pasted_content\b[^>]*>.*?</pasted_content\b[^>]*>", re.S | re.I)
+_PASTE_OPEN_RE = re.compile(r"<pasted_content\b[^>]*>.*\Z", re.S | re.I)
+
+
+def operator_words(prompt: str) -> str:
+    """The prompt with every pasted block removed."""
+    return _PASTE_OPEN_RE.sub("", _PASTE_BLOCK_RE.sub(" ", prompt or ""))
+
+
 def _client() -> str:
     """Which agent CLI drives this session — ONE implementation, engine/client.py."""
     try:
@@ -143,6 +158,16 @@ engine/scope.py. Harness or classifier denials are respected, never routed aroun
    methodology would have missed). Every slot beyond those is another `deep-hunter` on the
    next ranked vector (`cbh vectors next`); refill a slot the moment its worker hands back.
    {CREW}
+   SEND THE WHOLE WAVE IN ONE MESSAGE, and treat a failed spawn as a slot to re-send, not
+   as a lane that is gone: `API error (status 403 Forbidden): permission-denied` is a
+   server-side flake (6 of 10 spawns on 2026-11-18, and every brief text of that day first
+   failed and then succeeded BYTE-IDENTICAL), so re-send THAT slot's identical call at once,
+   up to six times, without serialising the rest of the wave behind it. The wave is
+   dispatched only when as many lanes are running as there are briefs.
+   NEVER hand the turn back when a lane lands: re-run `cbh autohunt` and dispatch the next
+   wave yourself. Reporting and waiting for permission is how a hunt stalls — measured
+   2026-11-18 on intigriti/1password, two stalls, 17 minutes the first time, on a client
+   whose `Stop gate:` line said KEEP HUNTING both times.
    `/remember` as each result lands, never at the end of the batch.
 3. Requests go through `CBH_PROJECT=<name> bbcurl` (scope + pacing + mandatory headers
    + audit). `mcp__caido__*` only for wire-level questions. Bare `curl` is a gate bypass
@@ -152,15 +177,32 @@ engine/scope.py. Harness or classifier denials are respected, never routed aroun
    continues: write it to `findings/` with its `.result.json`,
    `/remember --result confirmed`, `/chain` it, then the next vector.
    `vectors.py rotate` -> `revisit` -> `next` -> next in-scope host -> fresh `/recon` + `/cve`.
+   BUT "continue" QUEUES BEHIND THE PROOF (operator directive 2026-11-14): while a finding
+   THIS hunt claimed has no PASSing `.result.json` or no current `<stem>.refute.json`,
+   `cbh autohunt` prints `CONFIRM FIRST` and the wave may go ENTIRELY to confirmation —
+   finish the finding before the crew opens new surface. The escape from a confirmation
+   lane that cannot close is `cbh triage <f> --demote` (a KILL is answered by demoting the
+   claim, never by arguing with the gate), not leaving it unconfirmed and hunting on.
+   Read the verdict off `cbh autohunt`'s `Stop gate:` line every wave: under Claude Code a
+   Stop hook also enforces it, and under any other client that line is the only mechanism
+   there is (`cbh client` says which you are).
 5. Test accounts: `cbh identity new <url>` + self-register via Playwright (temp mail,
    temp SMS), without asking the operator for personal data. Blocked by CAPTCHA /
-   government ID / provider down -> write it under `blocked-tests/` and continue on the
-   unauthenticated surface.
-6. Lanes come from `cbh leads` (open leads/primitives ranked by payout and staleness; ones
-   waiting on an account are held back). Every lane ends with `cbh leads close <file> --as
-   proven|refuted|exhausted|blocked|stalled`. `blocked` = the target or the programme blocks it
-   (leaves the queue, waits for the operator); `stalled` = OUR tooling did not finish the lane
-   (stays in the queue, flagged RETRY). Never write a dead worker or a busy browser as
+   government ID / provider down -> that is ONE vector, not the lane: write it under
+   `blocked-tests/` and continue on the unauthenticated surface.
+5b. NOTHING WAITS FOR THE OPERATOR EXCEPT THE FOUR (operator directive 2026-11-14,
+   `cbh autonomy`). A write, a POST/PUT/PATCH/DELETE, an account the engagement does not
+   hold, a programme-approval question and our own tooling failing are LANES — fire them,
+   on our own account, in scope, minimally. A vector is parked only for `other-user-data`,
+   `availability`, `out-of-scope` or `human-inbox`, and only when its `blocked-tests/` file
+   DECLARES which, on a `**Park:** <reason>` line. No declaration = not parked, and
+   `cbh leads` hands it to the next lane. `cbh autonomy --reclassify <eng> --reopen` puts
+   the legacy pile back in the queue (431 files were parked on reasons nobody asked about).
+6. Lanes come from `cbh leads` (open leads/primitives ranked by payout and staleness; a lead
+   needing an account is marked REGISTER FIRST, not held back). Every lane ends with `cbh leads close <file> --as
+   proven|refuted|exhausted|blocked|stalled`. `blocked` = one of `cbh autonomy`'s four reasons,
+   declared on the file (leaves the queue, waits for the operator); `stalled` = OUR tooling did
+   not finish the lane (stays in the queue, flagged RETRY). Never write a dead worker or a busy browser as
    `blocked` — that emptied an engagement's queue on 2026-11-11; `cbh leads reopen <file>
    --note "why"` undoes it. Only ONE browser lane at a time per engagement (Chromium allows one
    browser per profile; the rest of the crew fires `bbcurl`).
@@ -168,8 +210,11 @@ engine/scope.py. Harness or classifier denials are respected, never routed aroun
    `/poc-run` -> `/refute` -> `cbh dedup` -> `/validate`.
 7. Severity is never inflated to clear the gate. A Low stays a Low; a confirmed
    primitive with no demonstrated impact belongs in `primitives/`, not `findings/`.
-8. Every Scout/Hunter/Reviewer brief you write starts with the crit/high doctrine
-   (`cbh doctrine` prints it — paste it verbatim; NEVER into a Freeroam brief).
+8. The crit/high doctrine is CARRIED BY THE ROLE (`agents/roles/<role>.md`, deployed to
+   `.claude/agents/`), so do NOT paste it into a brief — that re-sends an identical prefix
+   per spawn, which is the Strix antipattern (97% of its input tokens were re-submitted
+   context across 41 subagents). `cbh doctrine` prints it for you.
+   NEVER into a Freeroam brief — that slot's value is carrying no methodology at all.
    Every lane also starts from paid precedent: `cbh precedent --lead <file>` (155 disclosed
    reports, query derived from the file — `cbh report-intel` went unused for a whole six-day
    hunt because it needed a dataset path and an invented query). `cbh leads` already prints
@@ -184,7 +229,7 @@ engine/scope.py. Harness or classifier denials are respected, never routed aroun
 Stop the hunt by saying so ("стоп охота" / "stop hunting")."""
 
 
-def caido_line() -> str:
+def caido_line(engagement: str = "") -> str:
     """Bring the proxy up before the hunt, and say what happened.
 
     Operator directive 2026-10-16: never print "start Caido" at the operator again.
@@ -203,10 +248,32 @@ def caido_line() -> str:
     except Exception as e:  # noqa: BLE001
         return f"CAIDO: could not be started ({e}). bbcurl still works; no wire capture."
     if p.returncode == 0:
-        return "CAIDO: up on 127.0.0.1:8080 (started for you — mcp__caido__* is live)."
+        return ("CAIDO: up on 127.0.0.1:8080 (started for you — mcp__caido__* is live)."
+                + _caido_project_line(engagement))
     detail = (p.stderr or p.stdout or "").strip().splitlines()
     return ("CAIDO: DOWN — " + (detail[0] if detail else "unknown error")
             + ". Hunt through bbcurl; no redirect-chain/cookie evidence until it is up.")
+
+
+def _caido_project_line(engagement: str = "") -> str:
+    """Keep Caido on the ONE shared project every programme records into (`bughunter`).
+
+    Operator directive 2026-11-18: one project for every programme, not one per engagement.
+    Before this nothing chose the project, so whatever was current got the traffic. The
+    history is shared, so a reader filters by host (`req.host.cont:"<domain>"`). Never blocks
+    the hunt: an error is a line. `engagement` is accepted for the callers and unused.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engine"))
+        import caido_project  # type: ignore
+        r = caido_project.ensure()
+    except Exception as e:  # noqa: BLE001
+        return f"\nCAIDO PROJECT: not checked ({e})."
+    if r.get("ok"):
+        return (f"\nCAIDO PROJECT: `{r['want']}` (shared by every programme — filter history "
+                f"by host: HTTPQL `req.host.cont:\"<domain>\"`).")
+    return (f"\nCAIDO PROJECT: NOT `{r['want']}` — current is `{r.get('current', '?')}`. "
+            f"{r.get('why', '')} Run `python3 engine/caido_project.py --ensure`.")
 
 
 def main() -> int:
@@ -216,7 +283,7 @@ def main() -> int:
         ev = json.loads(sys.stdin.read() or "{}")
     except Exception:  # noqa: BLE001
         return 0
-    prompt = (ev.get("prompt") or "")[:4000]
+    prompt = operator_words(ev.get("prompt") or "")[:4000]
     session = ev.get("session_id", "")
     if not prompt.strip():
         return 0
@@ -243,7 +310,7 @@ def main() -> int:
         if not was:
             print(_client_map() + ORDERS.replace("{SPAWN}", _spawn_line())
                         .replace("{CREW}", _crew_line(ev)))
-            line = caido_line()
+            line = caido_line(os.environ.get("CBH_PROJECT", ""))
             if line:
                 print("")
                 print(line)

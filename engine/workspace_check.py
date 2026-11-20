@@ -65,6 +65,9 @@ TOOLS_REQUIRED = [
     "anew", "qsreplace", "unfurl", "gf", "jq",
     # JS comprehension
     "jsluice", "wakaru",
+    # mobile. `jadx` here is scripts/jadx, not tools/jadx/bin/jadx: the raw launcher
+    # finds no JVM on this box and the all-in-one jar opens the GUI (2026-11-13).
+    "jadx",
     # secrets / SCA
     "gitleaks", "trivy",
     # bypass / takeover / OOB / scanners (policy-restricted, but must exist)

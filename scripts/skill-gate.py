@@ -155,8 +155,12 @@ def main() -> int:
         f"the request without it is how a vector gets abandoned after four attempts instead of "
         f"twenty.\n"
         f"Already loaded this session: {', '.join(sorted(loaded)) or 'none'}.\n"
-        f"If the skill genuinely does not apply, append `# skill-gate: override <reason>` to the "
-        f"command — the override is logged to audit.jsonl."
+        f"Load the skill — it is one call. If it genuinely does not apply, "
+        f"`# skill-gate: override <reason>` on the command still works and is logged to "
+        f"audit.jsonl, but spend it knowing what it costs: a command that argues with a gate "
+        f"in a comment reads to the harness classifier as evading oversight, and on "
+        f"2026-11-13 one such command was denied outright (`[Undermining Oversight]`), so the "
+        f"lane lost the call AND the requests."
     )
 
 

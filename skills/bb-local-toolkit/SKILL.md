@@ -50,14 +50,15 @@ and it is the reason this file lists absence as loudly as presence.
 | `gitleaks` | `~/.local/bin/gitleaks` | secret scan on a reconstructed tree (`--no-git -s <dir>`) — finds, does **not** verify |
 | `trivy` | `~/.local/bin/trivy` | dependency CVEs once package files are recovered (`trivy fs <dir>`) |
 | `subzy` | `~/.local/bin/subzy` | subdomain takeover — fingerprints at `~/security-research/tools/data/takeover-fingerprints.json` |
+| `jadx` | `~/.local/bin/jadx` | APK/dex -> Java (`scripts/jadx` wrapper: sets JAVA_HOME, runs the **CLI** entry and caps memory; `java -jar jadx-*-all.jar` opens the GUI and writes nothing) |
 | `heavy-run` | `~/.local/bin/heavy-run` | cgroup-capped runner — **mandatory** for jadx/apktool/big ffuf |
-
-**Declared but NOT on PATH right now — `cbh doctor` should be failing on this:** `whois`
 
 ## Installed, but availability is not permission
 
 | Tool | Path | The rule |
 |---|---|---|
+| `sqlmap` | `~/.local/bin/sqlmap` | Installed 2026-10-29, and it builds its own traffic, so `bbcurl` cannot cover it: **`scripts/bbscan sqlmap …` is the only permitted route** (scope + pacing + audit). RTEAM additionally requires email pre-approval before any SQLi. Raw `sqlmap` is ungated — that is why `bbscan` exists. |
+| `nmap` | `/usr/bin/nmap` | Same gate: **`scripts/bbscan nmap …`**, never raw. Port scanning is outside web-app scope on most programmes here and several answer aggressive probing by blocking the researcher, so one narrow port list against one already-in-scope host, or not at all. |
 | `nuclei` | `~/.local/bin/nuclei` | **No sweeps.** Every engagement here forbids broad automated scanning. One targeted template against one already-fingerprinted host, or not at all. |
 | `dalfox` | `~/.local/bin/dalfox` | Same rule. A single confirmed injection point, never a crawl. |
 | `nomore403` | `~/.local/bin/nomore403` | One invocation is **dozens of requests at one path**, and it does not go through `bbcurl` — so it carries no pacing and no audit row. Point it at a single confirmed 403, never a list, and expect the hunt-nudge gate to ask for `hunt-auth-bypass` first. |
@@ -69,6 +70,7 @@ and it is the reason this file lists absence as loudly as presence.
 
 | Missing | Why | Instead |
 |---|---|---|
+| `whois` | no `apt` on this box, and it was never installed | nothing to do: `engine/scope.py` falls back to **RDAP over HTTPS**, so `cbh scope --resolve --whois` still answers |
 | `semgrep` | pip/docker only, and this box has no `pip`, `pipx` or `docker`. 31 call sites in our own skills, almost all in `hunt-source-aware-sast` — **that skill's static baseline does not run here** | `gitleaks` + `trivy fs` + `jsluice`, and say in the write-up that no SAST pass happened |
 | `trufflehog` | `go install` refuses it (replace directives) and the release-tarball path is sandbox-blocked | `gitleaks` to find, then `~/security-research/tools/data/keyhacks.md` to **validate** the hit by hand |
 | `arjun` | no `pip` | `ffuf` against a param wordlist, or `katana` + `qsreplace` |
@@ -78,8 +80,6 @@ and it is the reason this file lists absence as loudly as presence.
 | `jwt_tool` | needs `pycryptodomex` | `hunt-api-misconfig` by hand — decode, then alg/kid/jwk attacks |
 | `kiterunner` | not installed | `ffuf` with an API wordlist |
 | `git-dumper` | no `pip` | fetch `.git/HEAD`,`config`,`index`,`refs/*` then inflate `.git/objects/<2>/<38>` with `zlib` |
-
-**Listed here but now PRESENT — re-run `--write`, and use them:** `sqlmap` `nmap`
 
 ## Reference data — local, no request cost
 

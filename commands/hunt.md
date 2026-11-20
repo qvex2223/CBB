@@ -73,7 +73,7 @@ redirect/cookie confusion→  caido_send_request / caido_edit_request  (see the 
                               wall is not a verdict on the endpoint.
 finding looks real       →  poc_runtime spec with steps  (login → exploit → verify)
 browser/SPA/OAuth UI work →  Playwright MCP yourself     (never the operator's browser)
-needs an account         →  cbh identity new <url>       (throwaway email/SMS, self-register; blocked by CAPTCHA/ID-gate → log blocked-tests, keep hunting; ask the operator ONLY after self-service is exhausted or the flow needs their real data)
+needs an account         →  cbh identity new <url>       (throwaway email/SMS, self-register; blocked by CAPTCHA/ID-gate → log blocked-tests WITHOUT a **Park:** line, keep hunting; never an ask — `cbh autonomy`)
 same answer twice+       →  cbh diff <url>               (distinct bodies, or one wall)
 boolean looks like leak  →  cbh diff <url> --fields      (did the verdict field ever move?)
 request already fired    →  cbh spec <url> --steps       (spec from the wire, not retyped)

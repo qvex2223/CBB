@@ -50,16 +50,18 @@ FREE = {
     "unfurl": ("split URLs — `unfurl keys` is the param census, `domains`/`paths` the rest", ""),
     "gf": ("pattern grep — 14 pattern files in `~/.gf`, `gf -list` to see them", ""),
     "jq": ("JSON", ""),
-    "whois": ("netblock ownership (`cbh scope --whois`)", ""),
     "jsluice": ("JS **AST** extraction — urls/secrets/query by how a value is used, not regex", ""),
     "wakaru": ("decompile a bundle into modules; `wakaru extract` reads a `.map`'s sourcesContent", ""),
     "gitleaks": ("secret scan on a reconstructed tree (`--no-git -s <dir>`) — finds, does **not** verify", ""),
     "trivy": ("dependency CVEs once package files are recovered (`trivy fs <dir>`)", ""),
     "subzy": ("subdomain takeover — fingerprints at `~/security-research/tools/data/takeover-fingerprints.json`", ""),
+    "jadx": ("APK/dex -> Java (`scripts/jadx` wrapper: sets JAVA_HOME, runs the **CLI** entry and caps memory; `java -jar jadx-*-all.jar` opens the GUI and writes nothing)", ""),
     "heavy-run": ("cgroup-capped runner — **mandatory** for jadx/apktool/big ffuf", ""),
 }
 
 RESTRICTED = {
+    "sqlmap": "Installed 2026-10-29, and it builds its own traffic, so `bbcurl` cannot cover it: **`scripts/bbscan sqlmap …` is the only permitted route** (scope + pacing + audit). RTEAM additionally requires email pre-approval before any SQLi. Raw `sqlmap` is ungated — that is why `bbscan` exists.",
+    "nmap": "Same gate: **`scripts/bbscan nmap …`**, never raw. Port scanning is outside web-app scope on most programmes here and several answer aggressive probing by blocking the researcher, so one narrow port list against one already-in-scope host, or not at all.",
     "nuclei": "**No sweeps.** Every engagement here forbids broad automated scanning. One targeted template against one already-fingerprinted host, or not at all.",
     "dalfox": "Same rule. A single confirmed injection point, never a crawl.",
     "nomore403": "One invocation is **dozens of requests at one path**, and it does not go through `bbcurl` — so it carries no pacing and no audit row. Point it at a single confirmed 403, never a list, and expect the hunt-nudge gate to ask for `hunt-auth-bypass` first.",
@@ -69,8 +71,7 @@ RESTRICTED = {
 }
 
 ABSENT = {
-    "sqlmap": ("automated SQLi scanner; RTEAM additionally requires email pre-approval before any SQLi", "`hunt-sqli` by hand — boolean pair first, then timing"),
-    "nmap": ("port scanning is outside web-app scope on these programs", "—"),
+    "whois": ("no `apt` on this box, and it was never installed", "nothing to do: `engine/scope.py` falls back to **RDAP over HTTPS**, so `cbh scope --resolve --whois` still answers"),
     "semgrep": ("pip/docker only, and this box has no `pip`, `pipx` or `docker`. 31 call sites in our own skills, almost all in `hunt-source-aware-sast` — **that skill's static baseline does not run here**", "`gitleaks` + `trivy fs` + `jsluice`, and say in the write-up that no SAST pass happened"),
     "trufflehog": ("`go install` refuses it (replace directives) and the release-tarball path is sandbox-blocked", "`gitleaks` to find, then `~/security-research/tools/data/keyhacks.md` to **validate** the hit by hand"),
     "arjun": ("no `pip`", "`ffuf` against a param wordlist, or `katana` + `qsreplace`"),

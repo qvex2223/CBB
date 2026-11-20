@@ -22,6 +22,11 @@ Full history, incidents and rationale for every mechanism below: **`docs/workspa
 
 ## First thing every session
 
+**Orchestrator only.** A spawned worker (deep-hunter / scout / refuter) skips this whole list: its
+role file and its brief already name the engagement, the file and the budget. Measured over four
+Grok sessions (2026-11-14..18): workers re-ran it — `cbh client` 433 times, `ls leads/ primitives/`
+584 times, `PROJECTS.md` 90 — at ~75 KB of output each, ~19% of all worker input tokens.
+
 1. **`cbh client`** — your client's row: crew size, whether you may send, which gates are live, how
    `skills/`, `commands/` and subagents load for you. Do not assume another client's rules.
 2. `Targets/PROJECTS.md` — project index (name · status · scope one-liner).
@@ -42,8 +47,10 @@ scope from the program page. Only the safety floor below carries across engageme
 
 - **Authorized targets only.** In the program's scope, or not touched — even if the domain matches.
 - **Own accounts/data only.** Never access other users' data.
-- **Minimal PoC.** Anything that could affect other users or availability → stop and get program
-  approval first. No exploitation beyond proof.
+- **Minimal PoC.** Anything that could affect other users or availability → stop, park it with
+  `**Park:** availability`, and continue elsewhere. No exploitation beyond proof. This is a floor, not
+  a permission queue: it covers blast radius on people outside the engagement, **not** a write, a
+  POST or an approval question on our own account (`cbh autonomy`).
 - **Respect rate limits.** No DoS / MITM / social engineering / physical. No disclosure before fix.
 - Harness or classifier denials are respected, never routed around via another tool or agent.
 - **Every request aimed at a target goes through `CBH_PROJECT=<name> bbcurl …`** (scope + pacing +
@@ -78,8 +85,8 @@ pacing to make a fan-out faster.
 |---|---|
 | `engine/client.py` (`cbh client`) | The one client-capability table; every detector delegates to it. |
 | `engine/scope.py` (`/scope`, `--resolve`, `--whois`) | Default-deny scope gate; netblock programs require DNS resolution into declared ranges. `UNVERIFIED` ≠ approved. `--selftest` after edits. |
-| `engine/pacing.py` + `Targets/<name>/profile.json` | Global per-engagement request budget (`min_interval_seconds`, `max_concurrency`, `required_headers`), `flock`'d across processes. Change numbers in `profile.json`, not prose. No profile → 10 s default. |
-| `scripts/bbcurl` | curl with scope check, pacing, mandatory headers, audit, response corpus. `--bb-dry-run`, `--resolve`/`--connect-to` supported (scope checked on the pinned address). Don't use `-o /dev/stdout` (deadlocks). |
+| `engine/pacing.py` + `Targets/<name>/profile.json` | Global per-engagement request budget (`min_interval_seconds`, `max_concurrency`, `required_headers`, `required_cookie` — a mandated cookie CANNOT be a required header: `-H "Cookie:"` replaces what `-b` sent and drops the lane's jar), `flock`'d across processes. Change numbers in `profile.json`, not prose. No profile → 10 s default. |
+| `scripts/bbcurl` | curl with scope check, pacing, mandatory headers, audit, response corpus. `--bb-dry-run`, `--resolve`/`--connect-to` supported (scope checked on the pinned address). `--bb-caido` routes a proof request through Caido (refuses if Caido is down or a pin would not hold; `docs/caido.md`). Don't use `-o /dev/stdout` (deadlocks). |
 | `scripts/bbscan sqlmap …` / `bbscan nmap …` | Gated wrapper for tools that send their own traffic. Details `docs/bbscan.md`. |
 | `engine/poc_runtime.py` (`/poc-run`) | Fires a PoC spec, captures redirect chain + `Set-Cookie`, judges in code, writes `.result.json`. Multi-step `steps` with captures. A followed redirect without `final_url_contains`/`no_redirect` → INCONCLUSIVE. |
 | `engine/evidence.py` (`cbh evidence`, `cbh triage`) | DEMONSTRATED / MISMATCH / NOT-PROVEN / NO-EVIDENCE / WIRE-UNPROVEN / CLASS-UNPROVEN / REFUTED from artifacts, not wording. |
@@ -109,7 +116,7 @@ could become + its slice of the request budget, one brief per slot — re-run it
 it reads the closures and emits the next) · `cbh skill-graph` (the 68 skills as a graph: `--ladder
 <url|lead title>` orders the skills for a surface, `<skill>` shows what it defers to and where a
 proof escalates, `--chains` prints the disclosed reports whose class sets paid, `--lint` fails when a
-new skill has no SKIP clause) · `cbh client` (your row) · `cbh precedent --lead <file>` / `--class <c>` / `--signals <body>` (what a
+new skill has no SKIP clause) · `cbh client` (your row) · `cbh autonomy` (the four reasons a vector may still be parked; `--reclassify <eng> --reopen` returns the rest to the queue) · `cbh precedent --lead <file>` / `--class <c>` / `--signals <body>` (what a
 PAID disclosed report noticed first on this shape; 155 merged reports — `cbh leads` prints one line
 of it per lane) · `cbh doctor` (workspace health) · `cbh browser doctor` (browser lane state before
 re-firing a failed navigation) · `cbh tools doctor [--start]` (Caido/Playwright handshake; `burpmcp`
@@ -166,9 +173,11 @@ python scripts/gen_skill_catalog.py && python scripts/lint_skills.py`.
 - **Funnel:** `Targets/<name>/leads/` (hypothesis) → `primitives/` (capability proven, impact not) →
   `findings/<slug>/` (impact demonstrated, `.result.json` behind it). Impact unproven = not a
   finding. `cbh triage <f> --demote` knocks a claim down a tier. **Lanes come from `cbh leads`**
-  (ranked by payout + staleness, account-blocked ones held back); every lane ends with
+  (ranked by payout + staleness, a lead needing an account marked `REGISTER FIRST` rather than held
+  back); every lane ends with
   `cbh leads close <file> --as proven|refuted|exhausted|blocked|stalled --note "why"`. `blocked` =
-  the target/program blocks it (held back for the operator); `stalled` = our own tooling did not
+  one of `cbh autonomy`'s four reasons, declared on the file with a `**Park:**` line (held back for
+  the operator; a `blocked` banner with no declaration stays workable and says so); `stalled` = our own tooling did not
   finish the lane (stays in the queue, flagged `RETRY`). Swapping them emptied a queue on
   2026-11-11: `cbh leads reopen <file> --note "why"` undoes it.
 - **One wave at a time, and the wave is decided from state, not from memory.** `cbh autohunt` reads
@@ -188,29 +197,61 @@ python scripts/gen_skill_catalog.py && python scripts/lint_skills.py`.
 - **Read the paid precedent before the first payload:** `cbh precedent --lead <file>` prints the
   FIRST SIGNAL, the mechanic and the accepted impact proof; `cbh precedent --signals <captured body>`
   names which disclosed opening a response you are holding resembles. A precedent is a hint, never a
-  scope. `cbh doctrine` prints the crit/high doctrine that every skilled worker brief carries
-  (never a Freeroam brief — its value is carrying no methodology).
+  scope. The crit/high doctrine is CARRIED BY THE ROLE (`agents/roles/<role>.md`), not pasted
+  into each brief: re-sending an identical prefix per spawn is the Strix antipattern (145.1M
+  tokens, 41 subagents, 97% of input tokens re-submitted). `cbh doctrine` prints the same text
+  for you; a Freeroam slot reads none of it, deliberately.
 - **A code-only sink is not closed until a browser has tried it.** `href`/`location`/`innerHTML`/
   `window.open` fed by a URL, query, hash, postMessage or stored field: drive the page in Playwright
   with a marker in the controllable input and read the DOM/navigation back. "Needs Playwright" is a
   reason to use Playwright, not to skip the lane.
 - **Five-minute rule:** no progress on a vector → `vectors.py rotate`, then `revisit`, then `next`;
   host exhausted → next in-scope host. Log the vector as tried in `hosts/<host>.md`.
-- **Continuous hunting:** after a confirmed Medium+, bank it (`findings/`, `/remember --result
-  confirmed`, `/chain`) and continue with the next vector. Report progress as statements, not
-  questions. The hunt ends when the operator says so. Severity is rated honestly regardless.
-- **Blocked vector** (needs another person's data/identity, program approval, or something only the
-  operator can do) → write it under `blocked-tests/` with the reason and continue elsewhere.
+- **Continuous hunting, and a finding is FINISHED before the crew moves on** (operator directive
+  2026-11-14). A finding is never a reason to stop: bank it (`findings/`, `/remember --result
+  confirmed`, `/chain`) and continue with the next vector. The hunt ends when the operator says so.
+  But "continue" queues behind the proof — while a finding THIS hunt claimed is not fully
+  confirmed (no PASSing `.result.json`, or no current `<stem>.refute.json`) the wave may go
+  **entirely** to confirmation: `refuter_share` drops its one-hunter floor, `cbh autohunt` prints
+  `CONFIRM FIRST`, and hunting resumes in that same wave the moment the confirmation lanes run
+  out. The never-attacked BACKLOG keeps its one-third cap, so 400-odd old primitives cannot
+  swallow every wave. `stop_gate` continuous mode is the workspace default
+  (`CONTINUOUS_DEFAULT = True`); it was found OFF on 2026-11-14 with an empty note, which would
+  have let a demonstrated Medium+ open the stop door — turning it off needs a reason in the note.
+  Report progress as statements, not questions. Severity is rated honestly regardless.
+  **A client with no `Stop` hook gets none of this from the gate** — measured 2026-11-14: 0 of 59
+  sessions in `hunt-memory/pacing/stop_gate.json` were Grok-shaped, so its stop gate has never
+  run. Such a client reads the verdict off `cbh autohunt`'s `Stop gate:` line instead, every wave.
+- **Nothing waits for the operator except four things** (operator directive 2026-11-14 — `cbh
+  autonomy` prints them, `engine/autonomy.py` is the source every gate and every role file reads):
+  `other-user-data` · `availability` · `out-of-scope` · `human-inbox`. **Everything else is fired
+  without asking** — a write, a POST/PUT/PATCH/DELETE, an account the engagement does not hold
+  (`cbh identity new`, and a wall there is ONE vector), a programme-approval question, and our own
+  tooling failing (`--as stalled`, which stays in the queue flagged RETRY). A parked vector goes to
+  `blocked-tests/` and **declares its reason on a `**Park:** <reason>` line**; with no declaration it
+  is not parked and `cbh leads` hands it to the next lane. Per programme:
+  `"autonomy": {"unpark": ["human-inbox"]}` in `profile.json`. Measured 2026-11-14: 431 parked files,
+  ~11 on the floor, 36 of wildberries' 74 parked for being a POST — `cbh autonomy --reclassify <eng>
+  --reopen` puts the fireable ones back in the queue.
 - **Arming:** a plain hunting order ("начни хантить X", "start hunting") arms analysis mode
   (`scripts/hunt-arm.py` under Claude Code, `cbh hunt-start` elsewhere); "стоп охота" /
   "stop hunting" disarms. Questions never arm it.
 - **Crew:** an armed hunt is orchestrator + workers. The orchestrator plans, merges, writes
   `notes.md` and `/remember`; whether it may also send is the one client difference (`cbh client`).
   Launch the whole crew in ONE message and keep every slot filled from the queue.
+  **`agent-gate` holds the cap now** (2026-11-13: a session ran 7 lanes against
+  `"hunt_agents": 3`): a spawn is denied while the crew is full, a single message carrying more
+  lanes than the cap is denied as a batch, and a brief whose every `leads/`/`primitives/`
+  file is already closed is denied — pick the lane from `cbh leads`, never from `ls leads/`.
+  Nothing a worker backgrounds may outlive its hand-back: a background job that ends later
+  revives the finished worker and holds its crew slot until it does (measured: 106 minutes).
   **Spawn a ROLE, not `general-purpose`:** `deep-hunter` (one lead to proof or refutation) ·
   `scout` (15–30 hosts → ranked leads) · `refuter` (kill a candidate finding before it is reported).
   One source, `agents/roles/<role>.md` → `.claude/agents/` via
-  `python3 agents/gen_role_agents.py` (`--check` is in the test suite). The role files carry the
+  `python3 agents/gen_role_agents.py` (`--check` is in the test suite). **A client with no role
+  registry reads `agents/roles/<role>.md` AS A FILE before spawning the lane** — the same way it
+  reads `skills/` and `commands/`, because `scripts/sync_clients.py` deploys roles only into
+  `.claude/agents`. The role files carry the crit/high doctrine, the
   forbidden-action list, the named-victim rule and the handback-citation rule, so a brief cannot drop
   them; **your brief still names the engagement, the program, the scope summary, the file/host list
   and the budget** — workers do not see this file. Freeroam stays a `cbh freeroam run` slot (no
@@ -233,8 +274,8 @@ python scripts/gen_skill_catalog.py && python scripts/lint_skills.py`.
   redirect chains, cookies, replay. Land the final proof in a `poc_runtime` spec. Details
   `docs/caido.md`.
 - **Accounts:** `identity.json` → `cbh identity new <url>` + self-registration via Playwright → if
-  blocked (CAPTCHA, government ID, a phone the operator doesn't have), log it in `blocked-tests/` and
-  continue on the unauthenticated surface. Never wait for the operator for an account: if `cbh leads`
+  blocked (CAPTCHA, government ID, a phone the operator doesn't have), that is ONE vector: log it in
+  `blocked-tests/` and continue on the unauthenticated surface. Never wait for the operator for an account: if `cbh leads`
   holds leads back for one and the program allows self-registration, spend ONE lane registering a
   throwaway and record it in `identity.json` with a `"role"`. The operator has no Russian phone or
   accounts.

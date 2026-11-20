@@ -77,7 +77,26 @@ ROLE_SKILLS = {
     "deep-hunter": ["bb-methodology"],
 }
 
+# A census is ONE scout lane over 15-30 hosts (AGENTS.md "How to work"), never one lane per
+# host. The old split, `hosts[i::free][:8]`, dealt the host list across every free slot, so
+# six uncensused hosts and six free slots became six scout lanes of ONE host each. Measured
+# on Grok session 01a1e937 (hackerone/wolt, 2026-11-17): waves printed `census batch:
+# corporate.wolt.com`, `census batch: consumer-api.wolt.com`, …, and single-host lanes took
+# 221M of the 428M tokens the workers spent, for 0 findings. Pacing is one flock'd budget per
+# engagement, so N census lanes fire no more requests per minute than one; each extra lane
+# only adds a whole worker context (system prompt, doctrine, skills, notes) re-paid on every
+# model call. So hosts fill a lane up to SCOUT_BATCH_MAX before a second lane opens, and a
+# wave opens at most SCOUT_LANES_MAX census lanes; the rest of the list is the next wave's.
+SCOUT_BATCH_MAX = 30
+SCOUT_LANES_MAX = 2
+
 HOST_RE = re.compile(r"\b([a-z0-9][a-z0-9.\-]{3,}\.[a-z]{2,})\b", re.I)
+# For an item's FILE NAME, which the funnel spells `<host>-<slug>.md`. HOST_RE cannot be
+# reused here: its character class holds both `.` and `-`, so on `talantix.ru-ats` it
+# matched the whole string, slug included. The `-|$` boundary is what stops it at the slug
+# separator, and the lazy prefix with a `.tld` anchor is what keeps `api.hh.ru-similar-...`
+# from stopping at `api.hh`.
+FILE_HOST_RE = re.compile(r"^([a-z0-9][a-z0-9.\-]*?\.[a-z]{2,})(?:-|$)", re.I)
 H1_RE = re.compile(r"^#{1,3}\s+(.+?)\s*$", re.M)
 # `## Title` / `## Заголовок` as a bare section label, and the first non-empty line of its
 # body — the claim this workspace's finding template actually holds (see `_title_of_file`).
@@ -202,17 +221,27 @@ def _title_of_file(path: str) -> str:
 # ---------------------------------------------------------------------------
 # role: what the engagement's own state says this wave is for
 # ---------------------------------------------------------------------------
-def pick_role(assess: dict, queue: dict) -> tuple[str, str]:
+def pick_role(assess: dict, queue: dict, unrefuted_findings=()) -> tuple[str, str]:
     """(role, why). Order matters: a claim with no proof outranks new surface.
 
     An unproven claim sitting in `findings/` is the most expensive thing in the
     engagement — it blocks submission and it is what the refuter exists for. New
     surface is the cheapest and comes last, because a scout wave that runs while
     open primitives are unworked is how a 115-lead pile was built.
+
+    `unrefuted_findings` is the SECOND half of "not fully confirmed": a finding with a
+    PASSing PoC but no current kill attempt. `refuter_share` already hands the whole wave
+    to confirmation for either half, so without this branch the header and the briefs
+    disagreed — measured on the 2026-11-14 replay, `tumar/freedom` printed
+    `lead role deep-hunter — 68 workable lead(s)` above three refuter briefs.
     """
     if assess.get("claimed_but_unproven"):
         n = len(assess["claimed_but_unproven"])
         return "refuter", f"{n} finding(s) claimed without a PASSing PoC — kill or prove them first"
+    if unrefuted_findings:
+        n = len(unrefuted_findings)
+        return "refuter", (f"{n} finding(s) with a PoC but no current kill attempt — confirm "
+                           f"before opening new surface")
     if queue.get("open"):
         return "deep-hunter", f"{len(queue['open'])} workable lead(s)/primitive(s) in the queue"
     hosts = assess.get("next_hosts") or []
@@ -228,9 +257,44 @@ def pick_role(assess: dict, queue: dict) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # diversification
 # ---------------------------------------------------------------------------
+def _norm_file(path: str) -> str:
+    """A comparable key for one funnel item, whatever shape its path arrived in.
+
+    `stop_gate` hands absolute paths (`/home/.../Targets/x/y/primitives/a.md`) while
+    `lead_queue` hands engagement-relative ones (`primitives/a.md`). Comparing the raw
+    strings never matched, which is why the same record could be claimed twice. The key
+    is the last two components — tier plus item name — so both shapes collapse onto it.
+    """
+    parts = [p for p in str(path or "").replace("\\", "/").split("/") if p]
+    return "/".join(parts[-2:]) if len(parts) >= 2 else "/".join(parts)
+
+
 def _host_of(item: dict) -> str:
+    """The host this lane would work, from the title, else from the item's own file name.
+
+    The title alone was not enough, and the gap was silent: `spread()` only skips a
+    collision between two items that BOTH report a host, so an item reporting `""`
+    collided with nothing and the "no two lanes share a host" rule did not apply to it.
+    Measured 2026-11-14 on standoff365/hh — `leads/talantix.ru-ats.md`,
+    `leads/hh.ru-oauth-ato.md` and `primitives/hh.ru-account-otp-email.md` all returned
+    `""` because their titles name the surface (`Talantix ATS (/ats/*)`) and not the
+    hostname, so a six-slot wave put two lanes on `dev.hh.ru` and a third on a host
+    another lane already held.
+
+    The funnel names an item `<host>-<slug>.md` (`engine/funnel.py`), and that filing is
+    the authoritative answer, so it is tried FIRST. A title is only the fallback, because
+    a title names whatever host the write-up talks about — which is often a payload target
+    and not the host the lane works at all: `leads/dev.hh.ru-backurl.md` is titled around
+    the `backUrl` arm that points at `github.com`, and reading the title first made
+    `github.com` this lane's host. An out-of-scope payload host must never be the key the
+    wave spreads on.
+    """
+    name = _norm_file(item.get("file", "")).rsplit("/", 1)[-1]
+    m = FILE_HOST_RE.match(re.sub(r"\.md$", "", name, flags=re.I))
+    if m:
+        return m.group(1).lower()
     m = HOST_RE.search(item.get("title") or "")
-    return (m.group(1).lower() if m else "")
+    return m.group(1).lower() if m else ""
 
 
 def _cap_of(item: dict) -> str:
@@ -238,7 +302,10 @@ def _cap_of(item: dict) -> str:
     return (needs[0] or "").lower() if needs else ""
 
 
-def spread(items: list[dict], slots: int) -> list[dict]:
+
+
+def spread(items: list[dict], slots: int, taken_files: set[str] | None = None,
+           taken_hosts: set[str] | None = None) -> list[dict]:
     """Top `slots` items, no two sharing a host or a missing capability.
 
     Two workers on the same host contend for one pacing budget and one browser
@@ -246,12 +313,24 @@ def spread(items: list[dict], slots: int) -> list[dict]:
     same wall — which is how a wave of six returned six copies of one refusal.
     Rank order is preserved; a collision is skipped, not reordered, and if that
     leaves slots empty they are filled from the skipped items rather than wasted.
+
+    `taken_files` / `taken_hosts` are what the refuter pass already claimed, because the
+    spread has to hold across the WHOLE wave and not just inside this pass. Measured
+    2026-11-14 on standoff365/hh at six slots: `primitives/hh.ru-account-otp-email.md`
+    came back as lane 1 (refuter) AND lane 5 (deep-hunter) — one record, two roles, one
+    trying to kill the claim while the other tried to prove it — and `api.hh.ru` held
+    two lanes. At three slots the collision was invisible, so widening the crew is what
+    exposed it. A file already claimed is skipped outright; a host already claimed is a
+    soft collision, skipped first and only filled from the leftovers.
     """
     chosen: list[dict] = []
-    hosts: set[str] = set()
+    hosts: set[str] = set(taken_hosts or ())
     caps: set[str] = set()
     skipped: list[dict] = []
+    claimed = {_norm_file(f) for f in (taken_files or ())}
     for it in items:
+        if _norm_file(it.get("file", "")) in claimed:
+            continue                      # same record in two lanes: never, not even as filler
         h, c = _host_of(it), _cap_of(it)
         if (h and h in hosts) or (c and c in caps):
             skipped.append(it)
@@ -263,9 +342,20 @@ def spread(items: list[dict], slots: int) -> list[dict]:
             caps.add(c)
         if len(chosen) >= slots:
             return chosen
+    # Filling a slot from the skipped items beats leaving it idle: pacing is one global
+    # flock'd budget, so two lanes on one host serialise instead of adding requests. What
+    # they DO contend for is the single browser profile per engagement
+    # (`runtime/browser-lock.mjs`), so the lane is marked and the brief says so — a shared
+    # host the worker cannot see is how two lanes wedge on one Chromium profile.
     for it in skipped:
         if len(chosen) >= slots:
             break
+        h = _host_of(it)
+        if h and h in hosts:
+            it["host_shared"] = h
+        else:
+            if h:
+                hosts.add(h)
         chosen.append(it)
     return chosen
 
@@ -411,6 +501,8 @@ def brief_for(item: dict, eng: Path, graph: dict, requests: int, role: str) -> d
         "chains_via": chains_via,
         "operator_wall": item.get("operator_wall", ""),
         "network_wall": item.get("network_wall", ""),
+        "host_shared": item.get("host_shared", ""),
+        "hosts": list(item.get("hosts") or []),
         "partners": pairs,
         "precedent": _cut(re.sub(r"\s+", " ", precedent.lane_line(blob) or "").strip(), 300),
         "requests": requests,
@@ -437,16 +529,31 @@ def brief_for(item: dict, eng: Path, graph: dict, requests: int, role: str) -> d
     }
 
 
-def refuter_share(slots: int, role: str, other_work: bool) -> tuple[int, int]:
+def refuter_share(slots: int, role: str, other_work: bool,
+                  unconfirmed_findings: int = 0) -> tuple[int, int]:
     """(lanes refutation may take in all, of those how many for never-attacked claims).
 
-    Two different things are being balanced. An unproven claim in `findings/` blocks
-    submission, so it keeps the absolute priority it has always had — but capped at
-    `slots - 1`, because eleven of them must not send a wave out with no hunter in it.
-    A never-attacked claim is cheaper to leave alone for one more wave, so it takes a
-    third of the wave and no more; the point of the floor is that it is never zero
-    while such a claim exists. On the 2026-11-12 wildberries session the measured
-    split was 125 deep-hunter lanes to 1 refuter.
+    Two different things are being balanced. A finding THIS hunt produced that is not
+    fully confirmed blocks submission, so it has absolute priority. A never-attacked
+    claim from the backlog is cheaper to leave alone for one more wave, so it takes a
+    third of the wave and no more; the point of the floor is that it is never zero while
+    such a claim exists. On the 2026-11-12 wildberries session the measured split was
+    125 deep-hunter lanes to 1 refuter.
+
+    **Operator directive 2026-11-14: a finding is confirmed BEFORE the crew moves on.**
+    "если даже нашёл, пусть просто дальше продолжает искать, но уже после того как
+    полностью подтвердил находку." So while an unconfirmed finding exists the wave may go
+    entirely to confirmation — the old `slots - 1` hunter floor is dropped for that
+    category. The floor was there so a pile of unproven claims could not send out a wave
+    with no hunter in it, but it also meant the crew kept opening new surface while a
+    claim it had already made sat unproven, which is the half of continuous mode that was
+    never enforced: `stop_gate` banks a Medium+ and keeps going, and nothing checked that
+    the banked thing was finished first. Confirmation lanes are finite (one per
+    unconfirmed finding), so hunting resumes in the same wave the moment they run out —
+    "continue searching" is preserved, it just queues behind the proof.
+
+    The backlog share is deliberately NOT raised: 400-odd never-attacked primitives would
+    otherwise swallow every wave forever and no new surface would ever be opened.
 
     A wave forced to `--role deep-hunter` or `--role scout` fires no refuter lane: the
     operator asked for that role by name.
@@ -457,7 +564,27 @@ def refuter_share(slots: int, role: str, other_work: bool) -> tuple[int, int]:
         return 0, 0
     if not other_work:
         return slots, slots
-    return max(1, slots - 1), (max(1, slots // 3) if slots > 1 else 0)
+    backlog = max(1, slots // 3) if slots > 1 else 0
+    if unconfirmed_findings:
+        return slots, backlog
+    return max(1, slots - 1), backlog
+
+
+def _crew_slots(eng) -> tuple[int, str]:
+    """(slots, where the number came from) for this engagement — `engine/crew.py` decides.
+
+    Falls back to the client row only when crew.py cannot answer, so a broken profile costs
+    the override, never the wave.
+    """
+    try:
+        import crew  # type: ignore
+        plan = crew.plan(start=str(eng))
+        n = int(plan.get("agents") or 0)
+        if n > 0:
+            return n, str(plan.get("source") or "engine/crew.py")
+    except Exception:  # noqa: BLE001 - sizing must never break the wave
+        pass
+    return client_mod.crew(), "client row (crew.py could not size this engagement)"
 
 
 def wave(program: str = "", slots: int = 0, role: str = "") -> dict:
@@ -471,8 +598,26 @@ def wave(program: str = "", slots: int = 0, role: str = "") -> dict:
     graph = skill_graph.build()
 
     if not slots:
-        slots = client_mod.crew()
-    chosen_role, why = pick_role(assess, queue)
+        # `engine/crew.py` decides, not the client row: `"hunt_agents"` in the engagement's
+        # profile.json OVERRIDES any crew number (root AGENTS.md), and `scripts/agent-gate.py`
+        # already delegates here for the cap it enforces. This line used to read
+        # `client_mod.crew()`, which knows only the client, so a six-lane engagement got a
+        # three-brief wave: the cap said 6, the wave emitted 3, and the three idle slots were
+        # invisible because nothing printed the disagreement. Measured 2026-11-14 on
+        # standoff365/hh with `"hunt_agents": 6` set — `cbh autohunt` still said "3 slot(s)".
+        slots, slots_source = _crew_slots(eng)
+    else:
+        slots_source = "--slots on the command line"
+    # "Not fully confirmed" has two halves, and both are a finding THIS hunt claimed:
+    # no PASSing PoC behind it (`claimed_but_unproven`), or a PoC but no current kill
+    # attempt (`unrefuted`, findings tier). Either one blocks submission, so either one
+    # outranks opening new surface (operator directive 2026-11-14) — and the LEAD ROLE has
+    # to say so too, or the header contradicts the briefs underneath it.
+    unproven = list(assess.get("claimed_but_unproven") or [])
+    unrefuted_all = list(assess.get("unrefuted") or [])
+    unrefuted_findings = [u for u in unrefuted_all if u.get("tier") == "findings"]
+    unrefuted_backlog = [u for u in unrefuted_all if u.get("tier") != "findings"]
+    chosen_role, why = pick_role(assess, queue, unrefuted_findings)
     chosen_role = role or chosen_role
 
     # `budget["requests"]` is what this hunt has ALREADY FIRED, not what is left — the
@@ -502,10 +647,11 @@ def wave(program: str = "", slots: int = 0, role: str = "") -> dict:
     # measurement. Both sources now feed the lane list, deduped by file, with the
     # unproven ones still first.
     other_work = bool(queue.get("open")) or bool(assess.get("next_hosts"))
-    refute_room, unattacked_room = refuter_share(slots, role, other_work)
+    unconfirmed = len(unproven) + len(unrefuted_findings)
+    refute_room, unattacked_room = refuter_share(slots, role, other_work, unconfirmed)
     seen_refuter: set[str] = set()
     if refute_room:
-        for f in (assess.get("claimed_but_unproven") or []):
+        for f in unproven:
             if len(lanes) >= refute_room:
                 break
             seen_refuter.add(f.get("file", ""))
@@ -517,14 +663,22 @@ def wave(program: str = "", slots: int = 0, role: str = "") -> dict:
                 "evidence": f.get("evidence", ""),
                 "refute_reason": "claimed in this hunt with no PASSing PoC behind it",
                 "reward": 0, "age_days": 0}))
+        # A finding needing a kill attempt is NOT backlog: it is this hunt's own claim,
+        # so it does not compete for `unattacked_room` (a third of the wave). Before
+        # 2026-11-14 both tiers shared that cap, so a finding blocking submission could be
+        # crowded out of its own wave by primitives ranked ahead of it.
         taken = 0
-        for u in (assess.get("unrefuted") or []):
-            if len(lanes) >= refute_room or taken >= unattacked_room:
+        for u in unrefuted_findings + unrefuted_backlog:
+            is_backlog = u.get("tier") != "findings"
+            if len(lanes) >= refute_room:
                 break
+            if is_backlog and taken >= unattacked_room:
+                continue
             if u.get("file", "") in seen_refuter:
                 continue
             seen_refuter.add(u.get("file", ""))
-            taken += 1
+            if is_backlog:
+                taken += 1
             lanes.append(("refuter", {
                 "file": u.get("file", ""),
                 "kind": "finding" if u.get("tier") == "findings" else "primitive",
@@ -551,19 +705,34 @@ def wave(program: str = "", slots: int = 0, role: str = "") -> dict:
     open_items.sort(key=lambda r: (1 if r.get("operator_wall") else 0)
                     + (2 if r.get("network_wall") else 0))
     if role in ("", "deep-hunter"):
-        for it in spread(open_items, slots - len(lanes)):
+        # Exclude what the refuter pass already claimed — by record AND by host.
+        taken_hosts = {_host_of(it) for _r, it in lanes if _host_of(it)}
+        for it in spread(open_items, slots - len(lanes),
+                         taken_files=seen_refuter, taken_hosts=taken_hosts):
             if len(lanes) >= slots:
                 break
             lanes.append(("deep-hunter", it))
     if len(lanes) < slots and role in ("", "scout"):
-        hosts = assess.get("next_hosts") or []
+        hosts = list(assess.get("next_hosts") or [])
         free = slots - len(lanes)
         if hosts:
-            for i in range(min(free, len(hosts))):
-                batch = hosts[i::free][:8]
+            # `assess` caps `next_hosts` at 6 for the stop gate's own message; a census lane
+            # takes up to SCOUT_BATCH_MAX, so ask for the wider list here. Any failure keeps
+            # the six already in hand — the census must never cost the wave.
+            want = SCOUT_BATCH_MAX * min(free, SCOUT_LANES_MAX)
+            try:
+                hosts = stop_gate.next_hosts(eng, limit=want) or hosts
+            except Exception:  # noqa: BLE001
+                pass
+            n = min(free, SCOUT_LANES_MAX, -(-len(hosts) // SCOUT_BATCH_MAX))
+            for i in range(n):
+                batch = hosts[i::n][:SCOUT_BATCH_MAX]
                 lanes.append(("scout", {
                     "file": "", "kind": "host-batch", "class": "", "needs": [],
-                    "title": f"census batch: {', '.join(batch)}",
+                    "title": f"census batch: {len(batch)} host(s), {', '.join(batch)}",
+                    # The full list, because render cuts a title at 150 characters and a
+                    # 30-host title would brief the worker with a third of its hosts.
+                    "hosts": list(batch),
                     "reward": 0, "age_days": 0}))
     if role == "refuter":
         lanes = [l for l in lanes if l[0] == "refuter"]
@@ -571,6 +740,21 @@ def wave(program: str = "", slots: int = 0, role: str = "") -> dict:
         lanes = [l for l in lanes if l[0] == "scout"]
 
     briefs = [brief_for(it, eng, graph, per_lane, r) for r, it in lanes]
+    # The header names the LANES THAT EXIST, not the plan that produced them. `pick_role`
+    # predicts from the queue before `spread` has run, and the two can legitimately part
+    # ways: an unattacked claim in `primitives/` is BOTH an open queue item and a refuter
+    # candidate, so the refuter lane takes the record and `spread` then refuses to reissue
+    # it as a hunter lane (correct — one record, one lane) leaving the prediction stale.
+    # Measured on the 2026-11-14 decision replay: `standoff365/hh` printed `lead role
+    # deep-hunter — 1 workable lead(s)/primitive(s) in the queue` above a wave of one
+    # refuter and two scouts, with no hunter lane at all. A worker reads the header first.
+    if not role and lanes:
+        mix = [r for r, _ in lanes]
+        if chosen_role not in mix:
+            actual = max(set(mix), key=mix.count)
+            why = (f"{why}, but every one of those went to another lane — this wave is "
+                   f"{', '.join(f'{mix.count(r)} {r}' for r in sorted(set(mix)))}")
+            chosen_role = actual
     return {
         "engagement": queue.get("engagement", str(eng)),
         "engagement_dir": str(eng),
@@ -578,6 +762,8 @@ def wave(program: str = "", slots: int = 0, role: str = "") -> dict:
         "role": chosen_role,
         "role_why": why if not role else f"forced by --role {role} (state said {why})",
         "slots": slots,
+        "slots_source": slots_source,
+        "unconfirmed_findings": unconfirmed,
         "budget_requests_fired": fired,
         "budget_requests_cap": cap,
         # None, not 0: no cap configured. 0 means a configured cap is spent.
@@ -586,12 +772,21 @@ def wave(program: str = "", slots: int = 0, role: str = "") -> dict:
         "bar_met": bool(assess.get("proven")),
         "allow_stop": bool(assess.get("allow")),
         "stop_reason": assess.get("reason", ""),
+        # Whether a Stop hook will ACT on the verdict above. engine/stop_gate.py is a Claude
+        # Code `Stop` hook, so for any other client the verdict is advisory and this line is
+        # the only place it is ever seen (0 of 59 recorded stop_gate sessions were non-Claude).
+        "stop_hook": client_mod.stop_hook(),
         "queue": {k: (len(v) if isinstance(v, list) else v)
                   for k, v in queue.items() if k in ("open", "closed", "blocked", "stalled")},
         "accounts_wanted": accounts,
         "walled_open_items": sum(1 for it in open_items if it.get("operator_wall")),
         "egress_walled_open_items": sum(1 for it in open_items if it.get("network_wall")),
         "chain_hub": chain_graph.brief_line(eng).strip(),
+        # Slots this wave leaves empty ON PURPOSE: the queue and the census are both used up
+        # at their proper size. Said out loud because an orchestrator told to "keep every
+        # slot filled" otherwise fills them itself — on 01a1e937 it wrote 38
+        # `<host>-leftover-paths.md` leads to re-sweep hosts already closed `exhausted`.
+        "idle_slots": max(0, slots - len(briefs)),
         "briefs": briefs,
     }
 
@@ -603,7 +798,8 @@ def render(w: dict) -> str:
     if w.get("error"):
         return f"autohunt: {w['error']}\n"
     c = w["client"]
-    L = [f"AUTOHUNT — {w['engagement']}  ·  {c['label']} ({c['client']}), {w['slots']} slot(s)",
+    L = [f"AUTOHUNT — {w['engagement']}  ·  {c['label']} ({c['client']}), {w['slots']} slot(s)"
+         + (f" — {w['slots_source']}" if w.get("slots_source") else ""),
          f"  lead role {w['role']} — {w['role_why']}",
          f"  queue     {w['queue'].get('open', 0)} open · {w['queue'].get('stalled', 0)} stalled · "
          f"{w['queue'].get('blocked', 0)} blocked · {w['queue'].get('closed', 0)} closed",
@@ -631,8 +827,29 @@ def render(w: dict) -> str:
             L.append("            a headed window for the operator to log in: "
                      "`cbh browser login <program> --url <page>`")
     L.append(f"  {w['chain_hub']}")
+    # Dispatching one lane and waiting for it is the single biggest throughput loss there
+    # is, and it is invisible from inside the session: every lane still succeeds, the hunt
+    # still progresses, it just runs at a fraction of its budget. Measured 2026-11-14 on a
+    # 3.4 h Grok hunt of standoff365/hh — `cbh autohunt` emitted 6 briefs every wave, the
+    # orchestrator ran 3-4 lanes concurrently for the first hour and exactly ONE for the
+    # last 50 minutes: 46 lanes at 6-8 min each, ~8 lanes/hour against a capacity of ~45,
+    # and 9.96 requests/min against a paced budget of 600. So the rule is printed with the
+    # count, in the wave itself, every wave.
+    if len(w.get("briefs") or []) > 1:
+        n = len(w["briefs"])
+        L.append(f"  DISPATCH  all {n} brief(s) below in ONE message, then wait. Spawning one "
+                 f"lane and waiting for it wastes {n - 1}/{n} of this wave: lanes run "
+                 f"6-8 min each, they share one flock'd request budget (so {n} together fire "
+                 f"no faster than 1, they just cover {n}x the surface), and the moment a "
+                 f"lane hands back, re-run `cbh autohunt` and fill the slot from the queue.")
     if not c["orchestrator_may_send"]:
         L.append("  NOTE      this client does not fire requests — dispatch each brief below to a worker")
+    if w.get("idle_slots"):
+        L.append(f"  IDLE      {w['idle_slots']} slot(s) stay empty this wave on purpose: the queue "
+                 f"and the census are used up at their proper size. Do NOT write new leads to "
+                 f"fill them, do NOT split a census batch into one lane per host, and do NOT "
+                 f"re-sweep a host already closed `exhausted` without a new input (a JS-named "
+                 f"path, a response, a primitive). Re-run `cbh autohunt` when a lane lands.")
 
     for i, b in enumerate(w["briefs"], 1):
         L.append("")
@@ -641,6 +858,8 @@ def render(w: dict) -> str:
         L.append(f"--- LANE {i}/{len(w['briefs'])} · {b['role']} · {allow} ---")
         L.append(f"  item      {b['file'] or '(no file — new surface)'}")
         L.append(f"  title     {_cut(b['title'], 150)}")
+        if b.get("hosts"):
+            L.append(f"  hosts     ({len(b['hosts'])}, all of them this lane's) {', '.join(b['hosts'])}")
         meta = []
         if b["kind"]:
             meta.append(b["kind"])
@@ -664,6 +883,17 @@ def render(w: dict) -> str:
             L.append("            re-measure the refusal ONCE to date it, and close `--as "
                      "blocked` (the target's edge is")
             L.append("            what refuses us), never `--as exhausted`.")
+        if b.get("host_shared"):
+            L.append(f"  SHARED    another lane of this wave is on `{b['host_shared']}` too — the "
+                     f"queue does not")
+            L.append("            hold enough distinct hosts to fill the crew. Requests are safe "
+                     "(pacing is one")
+            L.append("            global flock'd budget, so you serialise rather than add load), "
+                     "but the engagement has")
+            L.append("            ONE browser profile: if this lane needs Playwright, say so in "
+                     "the hand-back and")
+            L.append("            fire `bbcurl` arms first, or the two lanes wedge on one "
+                     "Chromium profile.")
         if b.get("operator_wall"):
             L.append(f"  WALL      that need is an account the operator is holding open: "
                      f"{_cut(b['operator_wall'], 70)}")
@@ -732,8 +962,58 @@ def render(w: dict) -> str:
     L.append("")
     L.append("Re-run `cbh autohunt` after the wave lands: it re-reads closures, new primitives "
              "and spent budget and emits the next one.")
-    if not w["allow_stop"]:
-        L.append(f"Stop gate: {w['stop_reason'][:160]}")
+    if w.get("unconfirmed_findings"):
+        L.append(f"CONFIRM FIRST: {w['unconfirmed_findings']} finding(s) this hunt claimed are not "
+                 f"fully confirmed (no PASSing PoC, or no current kill attempt). Operator directive "
+                 f"2026-11-14: a finding is finished before the crew opens new surface, so the "
+                 f"refuter lanes above come first and hunting resumes in this same wave once they "
+                 f"run out. Each one closes with `cbh refute` + `cbh triage`; a KILL is answered "
+                 f"with `cbh triage <f> --demote`, never an argument.")
+    # Printed BOTH ways, not only on a deny. For a client whose Stop hook will act on it the
+    # deny is the interesting case; for a client with no Stop hook the ALLOW is the dangerous
+    # one — nothing would stop that session from simply ending, and this line is the whole
+    # mechanism it gets.
+    L.append(f"Stop gate: {'may stop' if w['allow_stop'] else 'KEEP HUNTING'} — "
+             f"{w['stop_reason'][:160] or 'no reason recorded'}")
+    if not w.get("stop_hook"):
+        # An advisory is not a mechanism. Measured on intigriti/1password 2026-11-18: this
+        # exact line printed on every wave and the session still handed the turn back to the
+        # operator after each single lane — twice, 17 minutes idle the first time — because
+        # "continuing is YOUR obligation" reads as a reminder, not as a step to execute. So the
+        # three things that actually stall an unhooked client are now numbered, in the wave,
+        # every wave: dispatch width, the spawn flake, and the hand-back.
+        n = len(w.get("briefs") or []) or 1
+        # Numbered dynamically. At n=1 the width step is OMITTED, not reworded: the parallel
+        # arithmetic is nonsense there ("1 together fire no faster than 1") and a one-lane wave
+        # has no width to get wrong. Steps 2 and 3 still apply at n=1 — the 2026-11-18 scout
+        # was a ONE-lane wave and its spawn 403'd three times before it ran.
+        steps = []
+        if n > 1:
+            steps.append(f"DISPATCH WIDTH. Send all {n} brief(s) above in ONE message. Measured "
+                         f"2026-11-18T05:51:18: two lanes sent in one message both ran to the "
+                         f"end (66 and 75 tool calls). Lanes share one flock'd budget, so {n} "
+                         f"together fire no faster than 1 — they cover {n}x the surface. One "
+                         f"lane at a time is the single biggest waste a wave can make.")
+        steps.append("A SPAWN THAT 403s IS NOT A DEAD LANE. `API error (status 403 Forbidden): "
+                     "permission-denied` is a server-side flake — 6 of 10 spawns on "
+                     "2026-11-18, and every one of that day's four brief texts first failed "
+                     "and then succeeded BYTE-IDENTICAL, so neither the brief, its length, the "
+                     "role nor the model is the cause. Re-send THAT SLOT's identical call at "
+                     "once, up to six times, and do not hold the rest of the wave behind it: "
+                     "the slots already running stay running. The wave is dispatched only when "
+                     "as many lanes are running as there are briefs.")
+        steps.append("NEVER HAND THE TURN BACK AFTER A LANE LANDS. Re-run `cbh autohunt`, act "
+                     "on the `Stop gate:` line, dispatch the next wave. Do not stop to report "
+                     "and wait for permission. A finding never ends the hunt either: bank it, "
+                     "confirm it (`cbh refute` + `cbh triage`, a KILL answered with `cbh "
+                     "triage <f> --demote`), take the next vector. ONLY THE OPERATOR ENDS A "
+                     "HUNT.")
+        # The header counts the steps it is about to print, because at n=1 there are two.
+        L.append(f"  ^ NO STOP HOOK ON THIS CLIENT — the {len(steps)} steps below are not "
+                 f"advice, they are the wave protocol. Nothing else keeps this session "
+                 f"hunting.")
+        for i, step in enumerate(steps, 1):
+            L.append(f"    {i}. {step}")
     return "\n".join(L) + "\n"
 
 

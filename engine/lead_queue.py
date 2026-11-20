@@ -42,6 +42,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "engine"))
 
 import funnel  # the one definition of a funnel item
+import autonomy  # the closed list of reasons a vector may still be parked
 
 # A status banner is written five ways in this workspace, and only the first of them was ever
 # detected here: `**Status:** X`, `**Status: X**` (colon inside the bold), `**Status** : X`,
@@ -63,6 +64,20 @@ BLOCKED_WORDS = ("blocked",)
 # STALLED is deliberately absent from both lists above: the lane did not answer the lead, so
 # the lead is neither closed nor held back — it is workable, with a mark on the row.
 STALLED_WORDS = ("stalled",)
+# NEEDS-RETRY is the verdict that was missing, and it is NOT `stalled`. `stalled` means OUR
+# tooling did not finish the lane; `needs-retry` means the TARGET would not answer — a rate
+# limit, a re-authentication, an environment that was down. Before this existed those lanes
+# were closed `refuted` or `exhausted`, which is a CLOSURE word, so the lead left the queue
+# permanently on evidence that was never gathered. Also absent from CLOSURE_WORDS and
+# BLOCKED_WORDS on purpose: conflating `blocked` and `stalled` emptied an engagement's queue on
+# 2026-11-11, and this is the third member of that family.
+RETRY_WORDS = ("needs-retry",)
+# How long a needs-retry lead is ranked DOWN rather than held back. A rate limit re-offered on
+# the next wave re-tops the queue and burns the slot on the same wall; a hold would instead make
+# `cbh leads`' count and its queue disagree, which engine/funnel.py exists to prevent. So it
+# stays in the queue, counted, carrying the mark, at a tenth of its score.
+RETRY_COOLDOWN_SECONDS = 6 * 3600
+RETRY_COOLDOWN_FACTOR = 0.1
 STATUS_RE = re.compile(r"^\*\*Status:\*\*.*$", re.M)
 
 # A worker who adjudicates a record at the top writes a HEADING, not a status banner:
@@ -93,7 +108,7 @@ TIER_PREFIX_RE = re.compile(
 # does not, so an undated `## REFUTED: …` or `## BLOCKED — …` leaves the row open and the
 # mark has to be made in the banner, where `cbh leads close` writes it.
 VERDICT_DATE_RE = re.compile(r"^[ \t]*(?:[(\[:,]|[\u2014\u2013]|-(?=[ \t]))?[ \t]*\d{4}\b")
-VERDICT_WORDS = CLOSURE_WORDS + BLOCKED_WORDS + STALLED_WORDS
+VERDICT_WORDS = CLOSURE_WORDS + BLOCKED_WORDS + STALLED_WORDS + RETRY_WORDS
 
 
 def _heading_verdict(heading: str) -> str:
@@ -134,7 +149,26 @@ def _is_closed(text: str) -> bool:
 
 
 def _is_blocked(text: str) -> bool:
+    """The banner says BLOCKED. On its own this no longer holds the lead back — see
+    `_holds_back`."""
     return any(b.startswith(BLOCKED_WORDS) for b in _banners(text))
+
+
+def _holds_back(text: str, eng: Path | None = None) -> str | None:
+    """The declared park reason that keeps this lead out of the queue, or None.
+
+    Operator directive 2026-11-14 ("я хочу чтобы он всё тестировал и без моего разрешения"):
+    a BLOCKED banner is no longer enough. The file has to DECLARE one of the reasons the
+    operator cannot grant — `**Park:** other-user-data|availability|out-of-scope|human-inbox`
+    (`engine/autonomy.py`) — or the lead is workable and the next lane fires it. Everything
+    the old banner also covered — a write, a POST, an account nobody holds, a programme
+    approval, our own tooling failing — is now a lane, not a wait.
+
+    A blocked banner with no declaration is NOT silently obeyed and NOT silently ignored: the
+    row stays workable and carries `undeclared_block`, so `cbh leads` can name it. 431 legacy
+    files had no declaration at all on 2026-11-14.
+    """
+    return autonomy.classify(text, eng) if _is_blocked(text) else None
 
 
 def _is_stalled(text: str) -> bool:
@@ -145,6 +179,16 @@ def _is_stalled(text: str) -> bool:
     reopening a mis-marked BLOCKED lead genuinely puts it back in the queue.
     """
     return any(b.startswith(STALLED_WORDS) for b in _banners(text))
+
+
+def _is_needs_retry(text: str) -> bool:
+    """The TARGET would not answer the last lane — rate limit, re-auth, environment down.
+
+    Distinct from `_is_stalled` (our own tooling) and from every closure word: the lead stays
+    workable, and the only consequence is that it is ranked down for `RETRY_COOLDOWN_SECONDS`
+    so it does not immediately re-top the queue and meet the same wall.
+    """
+    return any(b.startswith(RETRY_WORDS) for b in _banners(text))
 CHAIN_RE = re.compile(r"^\*\*Chain:\*\*(.*)$", re.M)
 NEEDS_RE = re.compile(r"needs\s+((?:`[^`]+`(?:\s*(?:\+|,|and|&)\s*)?)+)", re.I)
 SLUG_RE = re.compile(r"`([^`]+)`")
@@ -173,15 +217,42 @@ CLASS_WORDS = [  # (regex on name + title + `gives`, class key in reward_by_clas
     (r"csrf", "csrf"),
     (r"oracle|existence|route-set|registry|name-table|mount-table|allow-method|topology|"
      r"catalogue|catalog|version|stack|disclos|leak|banner|metrics", "info-leak"),
+    # One store serving two auth flows with no column saying which minted the row
+    # (CVE-2026-114607). Ranked at the `ato` band because that is what it yields: a session for
+    # an account we do not own. `invite-token` is deliberately NOT a token here — it collides
+    # with ordinary invite leads.
+    (r"token-purpose|magic-link|state-token", "ato"),
+    # A parameter the SERVER put in its own redirect and then trusted is an authorization
+    # failure (CVE-2026-123009), not an open redirect. But an INFERENCE token must be
+    # unambiguous, and the bare `redirect-param` was not: measured on the replay 2026-11-17, an
+    # open-redirect primitive whose chain line read `gives
+    # onelink-redirect-param-in-official-ozon-qr` was re-priced from the open-redirect band to
+    # the idor band and pushed into the top-3 lane list, displacing a real lead. A chain slug
+    # can use those two words for the ordinary thing. Only tokens that cannot mean anything
+    # else stay here; an item that really is this class DECLARES `**Class:** redirect-param`,
+    # which routes through skill_map.CLASS_SKILL and never through this table.
+    (r"from_base_branch|server-set-param|server-emitted-param", "idor"),
     (r"oauth|redirect-uri|session-fixation", "ato"),
     (r"open-redirect|redirect", "open-redirect"),
 ]
 # Relative payout when a programme publishes no reward_by_class (typical bounty tables).
+# A class absent from this map falls to DEFAULT_REWARD, so a routable class with no band here
+# ranks LOWER when an item declares it than when it does not — declaring the truth would demote
+# the lead. Found 2026-11-17 while adding the two classes below.
 DEFAULT_WEIGHTS = {"rce": 1_000_000, "sqli": 600_000, "ato": 600_000, "ssrf": 500_000,
                    "xxe": 500_000, "lfi": 500_000, "idor": 300_000, "data-exposure": 300_000,
                    "xss": 200_000, "postmessage": 200_000, "missing_authorization": 300_000,
                    "secret-exposure": 300_000, "csrf": 50_000, "open-redirect": 20_000,
-                   "info-leak": 10_000, "other": 50_000}
+                   "info-leak": 10_000, "other": 50_000,
+                   # CVE-2026-114607: a session for an account we do not own, no interaction.
+                   "token-purpose": 600_000,
+                   # CVE-2026-123009: reads and writes on an object the caller cannot reach.
+                   "redirect-param": 300_000,
+                   # `secret` is routable through skill_map.CLASS_SKILL and had no band, so
+                   # declaring it demoted the lead to DEFAULT_REWARD — the same defect found on
+                   # the two classes above in wave 1. Priced with `secret-exposure`, which it is
+                   # a synonym of.
+                   "secret": 300_000}
 DEFAULT_REWARD = 50_000
 
 
@@ -353,8 +424,31 @@ def _class_of(name: str, title: str) -> str:
     return "other"
 
 
+def _now_ts() -> float:
+    """Wall clock, unless `CBH_NOW` pins it.
+
+    `scan`'s score multiplies the reward by a staleness factor derived from whole DAYS, so
+    the ranked queue is a function of the calendar. Measured 2026-11-17: two replays of
+    UNCHANGED code forty minutes apart returned scores of 57142 and 60714 for the same leads
+    (50000 * (1 + 2/14) against 50000 * (1 + 3/14)) because a batch of files sharing an mtime
+    crossed the 3-day boundary between them, and two items swapped rank as a result. A
+    before/after diff taken across that boundary measures the calendar, not the change.
+
+    `CBH_NOW` (an ISO date or datetime) pins the clock so `scripts/decision_replay.py` is
+    deterministic. Nothing in a live hunt sets it, and an unparseable value is ignored rather
+    than raising into a hunt.
+    """
+    pin = os.environ.get("CBH_NOW", "").strip()
+    if pin:
+        try:
+            return dt.datetime.fromisoformat(pin).timestamp()
+        except ValueError:
+            pass
+    return dt.datetime.now().timestamp()
+
+
 def _age_days(path: Path) -> int:
-    return max(0, int((dt.datetime.now().timestamp() - path.stat().st_mtime) // 86400))
+    return max(0, int((_now_ts() - path.stat().st_mtime) // 86400))
 
 
 def scan(eng: Path) -> dict:
@@ -362,7 +456,9 @@ def scan(eng: Path) -> dict:
     rewards = {k.lower(): v for k, v in (prof.get("reward_by_class") or {}).items()}
     down = {k.lower() for k in (prof.get("downrank_classes") or {})}
     held = accounts_held(eng)
-    items, closed, blocked, stalled, needs_acct = [], 0, 0, 0, []
+    self_reg = bool(prof.get("self_registration", True))
+    items, closed, blocked, stalled, undeclared, needs_acct = [], 0, 0, 0, 0, []
+    needs_retry = 0
     for kind in ("primitives", "leads"):
         # `funnel.tier_items` is the one definition of what an item is: flat `<slug>.md`
         # plus the folder-per-item write-up, and never the tier's own README. A bare
@@ -390,16 +486,42 @@ def scan(eng: Path) -> dict:
             row = {"file": str(f.relative_to(eng)), "kind": kind[:-1], "class": cls,
                    "reward": reward, "age_days": age, "needs": slugs, "title": cut(title, 140),
                    "score": int(score), "class_declared": bool(decl)}
-            if _is_blocked(text):
+            park = _holds_back(text, eng)
+            if park:
                 blocked += 1
                 row["blocked"] = True
+                row["park"] = park
+            elif _is_blocked(text):
+                # A BLOCKED banner with no `**Park:**` declaration. Workable, and named as
+                # such so the pile does not quietly keep its old meaning.
+                undeclared += 1
+                row["undeclared_block"] = True
             if _is_stalled(text):
                 stalled += 1
                 row["stalled"] = True
+            if _is_needs_retry(text):
+                needs_retry += 1
+                row["needs_retry"] = True
+                # Ranked down inside the cooldown, never held back. The close time is the
+                # file's mtime, because `cbh leads close` writes the file — the banner's own
+                # date is day-granular and cannot carry a six-hour window.
+                waited = _now_ts() - f.stat().st_mtime
+                if waited < RETRY_COOLDOWN_SECONDS:
+                    row["cooling_seconds"] = int(RETRY_COOLDOWN_SECONDS - waited)
+                    row["score"] = int(row["score"] * RETRY_COOLDOWN_FACTOR)
             if unmet:
                 row["unmet_account"] = unmet
-                needs_acct.append(row)
-            elif not row.get("blocked"):
+                # An account this engagement does not hold is the lane's FIRST STEP, not a
+                # reason to wait: `cbh identity new <url>` + self-register. It is held back
+                # only where the programme itself forbids us to register
+                # (`"self_registration": false`), which is the operator's own per-programme
+                # opt-out. Measured 2026-11-14: 74 of 431 parked files were a registration
+                # wall, and a quarter of the queue sat behind one.
+                if self_reg:
+                    row["register_first"] = unmet
+                else:
+                    needs_acct.append(row)
+            if not row.get("blocked") and row not in needs_acct:
                 items.append(row)
     items.sort(key=lambda r: -r["score"])
     unlock: dict[str, list] = {}
@@ -408,7 +530,8 @@ def scan(eng: Path) -> dict:
     return {"engagement": str(eng.relative_to(_targets_root())), "accounts_held": sorted(held),
             "self_registration": prof.get("self_registration", True),
             "open": items, "needs_account": unlock, "closed": closed, "blocked": blocked,
-            "stalled": stalled}
+            "stalled": stalled, "needs_retry": needs_retry, "undeclared_block": undeclared,
+            "park_reasons": list(autonomy.retained(eng))}
 
 
 def _precedent(file_rel: str, limit: int = 1) -> str:
@@ -433,15 +556,33 @@ def _precedent(file_rel: str, limit: int = 1) -> str:
 def render(q: dict, top: int) -> str:
     out = [f"LEAD QUEUE — {q['engagement']}: {len(q['open'])} workable · "
            f"{sum(len(v) for v in q['needs_account'].values())} wait on an account · "
-           f"{q['blocked']} blocked · {q['closed']} closed"
-           + (f" · {q['stalled']} stalled (counted in workable)" if q.get("stalled") else ""),
+           f"{q['blocked']} parked · {q['closed']} closed"
+           + (f" · {q['stalled']} stalled (counted in workable)" if q.get("stalled") else "")
+           + (f" · {q['undeclared_block']} undeclared block(s), now workable"
+              if q.get("undeclared_block") else ""),
            f"accounts held: {', '.join(q['accounts_held']) or 'none'}"]
     out.append(f"\nNEXT (one deep-hunter lane each, drive to PROVEN or close):")
     for r in q["open"][:top]:
         stale = f" · untouched {r['age_days']}d" if r["age_days"] >= 3 else ""
         # A retry is not a fresh lane: say so, or the next worker repeats the setup that died.
         retry = " · RETRY (last lane stalled in our tooling, not at the target)" if r.get("stalled") else ""
-        out.append(f"  {r['score']:>8}  [{r['kind']}/{r['class']} ≤{r['reward']:,}]{stale}{retry}  {r['file']}")
+        # A different cause needs a different mark: `stalled` is ours to fix, `needs-retry` is
+        # the target's wall and the lane must come back with a different approach, not the same
+        # one sooner.
+        if r.get("needs_retry"):
+            cool = r.get("cooling_seconds") or 0
+            retry += (f" · NEEDS-RETRY (the TARGET would not answer — rate limit / re-auth / "
+                      f"environment; ranked down for another {cool // 60}m)" if cool else
+                      " · NEEDS-RETRY (the TARGET would not answer last time; cooldown over)")
+        # Two marks a lane must not have to discover for itself: an account it has to
+        # register before anything else is fireable, and a BLOCKED banner left over from
+        # when a write or an approval was a reason to stop (operator directive 2026-11-14).
+        reg = f" · REGISTER FIRST (`{r['register_first']}`: `cbh identity new <url>`)" \
+            if r.get("register_first") else ""
+        und = " · BLOCKED banner, no `**Park:**` declaration — workable, fire it" \
+            if r.get("undeclared_block") else ""
+        out.append(f"  {r['score']:>8}  [{r['kind']}/{r['class']} ≤{r['reward']:,}]"
+                   f"{stale}{retry}{reg}{und}  {r['file']}")
         # Paid precedent for THIS lane, unasked. `cbh report-intel` was named in 103 worker
         # briefs in session a0053cc0 and run zero times, because it needs a dataset path and
         # an invented query; here the query comes from the lead file itself. A hint printed
@@ -450,7 +591,8 @@ def render(q: dict, top: int) -> str:
         if hint:
             out.append(hint)
     if q["needs_account"]:
-        out.append("\nWAIT ON AN ACCOUNT (not handed to workers; the operator decides):")
+        out.append("\nWAIT ON AN ACCOUNT (`\"self_registration\": false` — this programme forbids "
+                   "us to register, so these are the operator's):")
         for slug, rows in sorted(q["needs_account"].items(), key=lambda kv: -sum(r["score"] for r in kv[1]))[:8]:
             out.append(f"  {len(rows):>3} lead(s) unlocked by `{slug}` — top: {rows[0]['file']}")
         if q["self_registration"] is not False:
@@ -458,8 +600,10 @@ def render(q: dict, top: int) -> str:
                        "registration; a working one is recorded in identity.json with a \"role\".")
     out.append("\nClose every lane: `cbh leads close <file> --as proven|refuted|exhausted|blocked|stalled "
                "--note \"why\"`")
-    out.append("  `blocked` = the target or the programme blocks it (another person's data, programme "
-               "approval, an account nobody holds).")
+    out.append("  `blocked` = ONLY a reason the operator cannot grant, DECLARED on the file as "
+               "`**Park:** <reason>`: " + ", ".join(q.get("park_reasons") or []) +
+               " (`cbh autonomy`). A write, a POST, an account nobody holds, a programme "
+               "approval and our own tooling failing are NOT blocks — they are the lane.")
     out.append("  `stalled` = OUR tooling did not finish the lane (browser lane busy, worker killed, "
                "MCP server gone). The lead stays in this queue.")
     return "\n".join(out)
@@ -475,7 +619,8 @@ def close(path: str, verdict: str, note: str) -> int:
         return 2
     text = p.read_text(encoding="utf-8")
     label = {"proven": "PROVEN", "refuted": "REFUTED", "exhausted": "EXHAUSTED",
-             "blocked": "BLOCKED", "stalled": "STALLED"}[verdict]
+             "blocked": "BLOCKED", "stalled": "STALLED",
+             "needs-retry": "NEEDS-RETRY"}[verdict]
     line = f"**Status:** {label} ({dt.date.today().isoformat()}){(' — ' + note) if note else ''}"
     if STATUS_RE.search(text):
         old = STATUS_RE.search(text).group(0)
@@ -494,7 +639,8 @@ def main(argv=None) -> int:
         ap = argparse.ArgumentParser(prog="cbh leads close")
         ap.add_argument("file")
         ap.add_argument("--as", dest="verdict", required=True,
-                        choices=["proven", "refuted", "exhausted", "blocked", "stalled"])
+                        choices=["proven", "refuted", "exhausted", "blocked", "stalled",
+                                 "needs-retry"])
         ap.add_argument("--note", default="")
         a = ap.parse_args(argv[1:])
         return close(a.file, a.verdict, a.note)
@@ -514,10 +660,13 @@ def main(argv=None) -> int:
         return close(a.file, "stalled", a.note)
     ap = argparse.ArgumentParser(prog="cbh leads")
     ap.add_argument("program", nargs="?", default="")
+    # `--project` is what `cbh census`/`cbh autohunt` call the same thing, and spelling it
+    # that way here used to answer `error: unrecognized arguments: --project`.
+    ap.add_argument("--project", default="", help="same as the positional program name")
     ap.add_argument("--top", type=int, default=12)
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
-    eng = resolve_engagement(a.program)
+    eng = resolve_engagement(a.program or a.project)
     if eng is None:
         print("No engagement resolved: pass a program name, set CBH_PROJECT, or run inside Targets/<...>/.")
         return 2

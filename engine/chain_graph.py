@@ -77,8 +77,20 @@ def _parse(line: str):
 # rejected: `is_dead` substring-matches the Status value, so "the guard is broken, not fixed"
 # and "Status: primitive -- unpatched" would both kill a live item.
 REMEDIATED_WORDS = ("REMEDIATED", "FIXED BY VENDOR", "PATCHED BY VENDOR", "FIX CONFIRMED")
-DEAD_WORDS = ("DEAD", "REFUTED", "KILLED", "SUPERSEDED", "CLOSED NEGATIVE", "WITHDRAWN",
-              *REMEDIATED_WORDS)
+# A bare word like REFUTED/DEAD/KILLED is ordinary narrative vocabulary in these write-ups --
+# "hypothesis REFUTED" about ONE arm, "not a dead host", "capability proven, impact REFUTED" --
+# so matching it anywhere in the Status value kills live items. Measured 2026-11-13 on
+# rteam/activ: 47 items flagged dead, >=6 of them false, including a primitive whose status
+# said "stands PROVEN and keeps supplying" three slugs and a STALLED lead that said "not a
+# dead host". The same hazard was already recognised for FIXED/PATCHED just above and solved
+# by requiring a PHRASE; it was never applied to these. So: bare verdict words match only as
+# the LEADING token of the Status value, phrases match anywhere (a phrase cannot be negated,
+# which is the property the comment above relies on).
+VERDICT_DEAD_WORDS = ("DEAD", "REFUTED", "KILLED", "SUPERSEDED", "WITHDRAWN")
+PHRASE_DEAD_WORDS = ("CLOSED NEGATIVE", *REMEDIATED_WORDS)
+DEAD_WORDS = (*VERDICT_DEAD_WORDS, *PHRASE_DEAD_WORDS)
+# Where the verdict token ends: a date, a dash, a bullet, a colon or a comma starts the prose.
+_VERDICT_HEAD_RE = re.compile(r"^[^(\[\u2014\u2013:;,.\u00b7|]+")
 STATUS_RE = re.compile(r"^\**Status:?\**:?\s*(.+)$", re.I | re.M)
 DEAD_HEADING_RE = re.compile(r"^#+\s*\**(?:SUPERSEDED|DEAD|REFUTED|KILLED)\b", re.I | re.M)
 
@@ -91,7 +103,11 @@ def is_dead(text: str, chain_line: str = "") -> bool:
         return True
     for m in STATUS_RE.finditer(text):
         value = m.group(1).upper()
-        if any(w in value for w in DEAD_WORDS):
+        if any(w in value for w in PHRASE_DEAD_WORDS):
+            return True
+        head = _VERDICT_HEAD_RE.match(value.strip().lstrip("*").strip())
+        head = head.group(0).strip() if head else ""
+        if any(head.startswith(w) for w in VERDICT_DEAD_WORDS):
             return True
     return False
 

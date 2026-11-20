@@ -65,10 +65,18 @@ class HuntArm(unittest.TestCase):
             self.assertIn(needle, out)
 
     def test_orders_make_fan_out_the_default_not_an_option(self):
-        """Operator directive 2026-10-16: one orchestrator, a crew of workers."""
+        """Operator directive 2026-10-16: one orchestrator, a crew of workers.
+
+        The lane kinds are pinned by the spelling an orchestrator actually TYPES —
+        `subagent_type: "deep-hunter"` — not by a capitalised prose word. Until 2026-11-17
+        this asserted "Scout"/"Hunter"/"Reviewer", three words supplied by a single
+        sentence ordering the doctrine to be pasted into every brief. When that sentence
+        went (item 10: the doctrine moved into the role files) the pin went with it, and
+        "Reviewer" turned out to name no role at all — the third role is `refuter`.
+        """
         out = self._run("хантим ozon")
-        for needle in ("ORCHESTRATE", "/parallel", "Scout", "Hunter", "Freeroam",
-                       "hunt_agents"):
+        for needle in ("ORCHESTRATE", "/parallel", "deep-hunter", "scout", "refuter",
+                       "Freeroam", "hunt_agents"):
             self.assertIn(needle, out)
 
     def test_orders_carry_a_crew_size_instead_of_a_constant(self):
@@ -92,6 +100,30 @@ class HuntArm(unittest.TestCase):
 
     def test_unrelated_work_does_not_arm(self):
         self.assertEqual(self._run("почисти логи и покажи diff").strip(), "")
+        self.assertFalse(self._state().get("armed"))
+
+    def test_pasted_material_does_not_arm(self):
+        # 2026-11-20: a pasted digest saying "recon" and "hunt-loop" armed the gate on a
+        # prompt that only asked for an opinion.
+        prompt = ("вот думаю улучшить инструмент, скажи что стоит внимания\n\n"
+                  '<pasted_content id="2610">Можно добавить в recon как сигнал. '
+                  'Прямо про hunt-loop / early-stop.</pasted_content id="2610">')
+        self.assertEqual(self._run(prompt).strip(), "")
+        self.assertFalse(self._state().get("armed"))
+
+    def test_an_order_next_to_a_paste_still_arms(self):
+        prompt = ('начни хантить ozon, вот заметки\n<pasted_content id="7">'
+                  'старые логи</pasted_content id="7">')
+        self.assertIn("HUNT MODE ARMED", self._run(prompt))
+        self.assertTrue(self._state().get("armed"))
+
+    def test_a_pasted_stop_does_not_disarm(self):
+        self._run("начни хантить")
+        self._run('глянь лог <pasted_content id="9">stop hunting</pasted_content id="9">')
+        self.assertTrue(self._state().get("armed"))
+
+    def test_an_unclosed_paste_is_cut_to_the_end(self):
+        self.assertEqual(self._run('мнение? <pasted_content id="3">recon hunt').strip(), "")
         self.assertFalse(self._state().get("armed"))
 
     def test_env_opt_out(self):

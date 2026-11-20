@@ -123,9 +123,12 @@ of a check, not a disclosure. (`cbh diff <url> --fields` is the tool.)
 
 **The 404 differential warning (standing rule):** a random-UUID probe proves
 nothing when the backend looks up before it authorizes. To test
-`authz-before-lookup` you need a **real object id that is not yours**. If you
-cannot get one, the thread is `blocked`, not `rejected` — log it under
-`Targets/<name>/blocked-tests/` with the command ready to run.
+`authz-before-lookup` you need a **real object id the current session does not own** — and
+the way to get one is a SECOND identity of our own, not a real user's: `cbh identity new
+<url>` twice, then read B's id from A's session. That is a lane, not a park (`cbh autonomy`).
+Only when the programme forbids a second registration is the thread parked, with
+`**Park:** other-user-data` declared in `Targets/<name>/blocked-tests/` and the command
+ready to run.
 
 ## Invariants (where the money bugs live)
 

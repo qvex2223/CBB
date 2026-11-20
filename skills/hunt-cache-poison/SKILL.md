@@ -406,3 +406,22 @@ The following real, verified bug-bounty / coordinated-disclosure cases extend th
 - **`hunt-auth-bypass`** — Web Cache Deception turns authenticated pages into publicly-cached responses, leaking session-bound content to unauthenticated attackers. Chain primitive: `/account/profile.css` served as authenticated HTML, cached as static asset → attacker fetches same URL without auth and reads victim's email/tokens → session cookies in body → full ATO.
 - **`security-arsenal`** — Reach for the unkeyed-header wordlist (`X-Forwarded-Host`, `X-Host`, `X-Forwarded-Server`, `X-HTTP-Host-Override`, `Forwarded`, `X-Original-URL`) and the WCD path-extension list (`.css`, `.js`, `.jpg`, `.ico`, `;.css`, `%2e%2ecss`) before hand-fuzzing.
 - **`triage-validation`** — Run the Pre-Severity Gate before claiming Critical: the poisoned response MUST be reproducible from a separate IP/incognito without your poison headers. If only your own browser sees the effect, it's a self-cache and N/A.
+
+---
+
+## Cache key vs cache identity
+
+This skill is about the **key** an edge or CDN stores a response under: which request parts are
+keyed, which are not, and what an unkeyed input lets you plant. A second layer sits inside the
+application and fails differently: a framework-level cached function stores its result under an
+**identity** computed from its arguments. Two distinct calls whose arguments collapse to one
+identity, or an outer cached entry stored before an inner function's tenant/locale dependencies
+are recorded, serve one caller's content to another without any cache header being wrong.
+
+Signals: `use cache` / `unstable_cache` / `cache()` wrappers in the bundle or server source;
+per-tenant or per-locale content on a route that is otherwise static; a cached helper taking a
+Buffer, `Date` or object argument.
+
+**SKIP** — `hunt-nextjs` owns the Next.js Cache Components advisories (CVE-2026-119349,
+CVE-2026-119351) and states which arm is excluded for needing concurrency.
+

@@ -20,6 +20,11 @@ SKILLS_DIR = os.path.expanduser("~/.claude/skills")
 CLASS_SKILL = {
     "sqli": ["hunt-sqli"], "nosqli": ["hunt-nosqli"], "xss": ["hunt-xss", "hunt-dom"],
     "ssrf": ["hunt-ssrf"], "idor": ["hunt-idor"], "open-redirect": ["hunt-open-redirect"],
+    # Routability, not just routing: `lead_queue.known_classes()` is the union of CLASS_WORDS,
+    # this map and CLASS_TO_CORPUS, and `declared_class` returns "" for anything outside it —
+    # so a `**Class:** redirect-param` line would be silently dropped without this entry.
+    "redirect-param": ["hunt-idor", "api-recon"],
+    "token-purpose": ["hunt-oauth", "hunt-session"],
     "lfi": ["hunt-lfi"], "ssti": ["hunt-ssti"], "rce": ["hunt-rce"], "xxe": ["hunt-xxe"],
     "auth-bypass": ["hunt-auth-bypass", "hunt-session"], "llm-ai": ["hunt-llm-ai"],
     "saml": ["hunt-saml"], "oauth": ["hunt-oauth"], "mfa": ["hunt-mfa-bypass"],

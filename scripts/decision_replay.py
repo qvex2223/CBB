@@ -25,17 +25,65 @@ at this one (they are gitignored, so a fresh worktree has none), and run the sam
 there:
 
     git worktree add /tmp/before <commit>
-    ln -s "$PWD/Targets" "$PWD/hunt-memory" /tmp/before/
+    cp -al "$PWD/Targets/." /tmp/before/Targets/      # NOT ln -s; see below
+    cp -al "$PWD/hunt-memory" /tmp/before/hunt-memory
     cp scripts/decision_replay.py /tmp/before/scripts/
     (cd /tmp/before && python3 scripts/decision_replay.py --out /tmp/before.txt)
     diff -u /tmp/before.txt /tmp/new.txt
 
+`cp -al` (hardlinks, instant, no extra space), NOT `ln -s`, and NOT `CBH_TARGETS_ROOT`
+pointing elsewhere. Both of those fail QUIETLY, which is worse than failing:
+
+  * `Targets/_TEMPLATE` is tracked, so a fresh worktree ALREADY has a `Targets/`
+    directory — `ln -s .../Targets /tmp/before/` therefore lands as
+    `/tmp/before/Targets/Targets`, the replay sees only `_TEMPLATE`, and it reports
+    "1 engagement(s)" instead of 19 as if that were the answer.
+  * A symlinked `Targets` is resolved on the way to an engagement path but not in the
+    root string, so `lead_queue.scan` raises
+    `ValueError: '<resolved>/x/y' is not in the subpath of '<unresolved>/Targets'`
+    on every engagement, and the report fills with `!!` lines rather than decisions.
+  * Engagement DISCOVERY walks `REPO/Targets`, while `lead_queue` honours
+    `CBH_TARGETS_ROOT`. Setting only the env var points the two halves at different
+    corpora and every engagement errors out.
+
+Under a LIVE hunt, snapshot the corpus once and give BOTH worktrees the same snapshot
+(the markdown/json files are all this reads: `find Targets -name '*.md' -o -name '*.json'`
+was 411 MB of 9.3 GB on 2026-11-14). Otherwise the diff measures the hunt's own progress
+between the two runs instead of the code change.
+
 The script must be the same file in both runs — only `engine/` is allowed to differ, or the
-diff measures the harness instead of the change.
+diff measures the harness instead of the change. The same goes for `--client`: it changes the
+row every gate reads, so a before/after diff must pass the same value to both runs.
+
+CLIENT PARITY is the other diff this script serves. The workspace must decide the same thing
+whichever agent CLI is driving, so replay the SAME corpus as each client and diff those two:
+
+    python3 scripts/decision_replay.py --client claude  --out /tmp/p-claude.txt
+    python3 scripts/decision_replay.py --client generic --out /tmp/p-generic.txt
+    diff /tmp/p-claude.txt /tmp/p-generic.txt
+
+What may legitimately differ is everything that is a FUNCTION OF CREW SIZE, and nothing else.
+Measured 2026-11-17 over 20 engagements: with the `wave` blocks stripped, the two reports are
+byte-identical but for the header — the queue ranking, the stop verdict, every evidence status
+and every refute coverage line match exactly. Inside a `wave` block three things move and all
+three are by design:
+
+  * the lane COUNT (3 against 6), so the block is simply longer;
+  * the refuter SHARE, which is a fraction of the crew (1 of 3, 2 of 6) — proportional, not a
+    different decision;
+  * consequently the ROLE of an item that falls on the boundary: `waf-sqli-shape-blocks-
+    source-ip` is lane 2 in both, handed to a deep-hunter at crew 3 and to a refuter at crew 6.
+
+The parity rule, therefore: outside the `wave` blocks the two reports must be byte-identical
+except the header; inside them the ITEM SEQUENCE must be identical and the refuter share must
+be the same fraction. A ranked item appearing in one report and not the other, a differing
+verdict or evidence status, a differing skill set for the SAME item, or a refuter share that is
+not proportional, is a PARITY BUG.
 """
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import io
 import os
 import sys
@@ -47,8 +95,12 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "engine"))
 
 import funnel  # noqa: E402  the one definition of an item and its name
+import client as client_mod  # noqa: E402  the one client-capability table
 
-SLOTS = 3  # the real crew size here; the lane mix is only interesting at the real number
+# The crew size the lane mix is replayed at. main() sets it from the client row: the mix is
+# only interesting at the real number, and the real number is per client (claude 3,
+# generic/Grok 6). The module default keeps this file importable on its own.
+SLOTS = 3
 
 
 def _engagements(root: Path) -> list[Path]:
@@ -197,11 +249,33 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only", default="", help="one engagement, as platform/program")
     ap.add_argument("--corpus", default=str(REPO / "Targets"),
                     help="corpus root (default: this tree's Targets/)")
+    ap.add_argument("--client", default="",
+                    help="replay as this client row (claude|generic); default: the detected one")
+    ap.add_argument("--as-of", default="",
+                    help="pin the clock to this ISO date (default: today's date at 00:00). "
+                         "The ranked queue depends on whole days of staleness, so a "
+                         "before/after pair MUST pass the same value")
     args = ap.parse_args(list(sys.argv[1:] if argv is None else argv))
 
     # Deterministic: a wave reads CBH_PROJECT when no program is passed, and an inherited
     # value from the operator's shell would silently replay a different engagement.
     os.environ.pop("CBH_PROJECT", None)
+
+    # Replay AS one client. `CBH_AGENT` wins in engine/client.py's detection, so setting it
+    # here is what makes every engine module see the same row — autohunt's own brief wording
+    # included, since it reads `orchestrator_may_send` while rendering. The crew size comes
+    # from that row too, so a parity diff compares DECISIONS and not two crew numbers.
+    # Pin the clock. Without this the report is not time-invariant: `lead_queue.scan`
+    # multiplies a lead's reward by whole DAYS of staleness, so two runs of unchanged code
+    # either side of a day boundary print different scores and can swap two items' rank.
+    # Measured 2026-11-17, forty minutes apart: 57142 -> 60714 on a batch of shared-mtime
+    # leads, plus two rank swaps that read exactly like a regression.
+    os.environ["CBH_NOW"] = args.as_of or dt.date.today().isoformat()
+
+    global SLOTS
+    row = client_mod.profile(args.client)
+    os.environ["CBH_AGENT"] = row["client"]
+    SLOTS = int(row["crew"])
 
     # Resolved: this workspace is reachable through a symlinked name, and an unresolved
     # root made every `eng.relative_to(targets_root())` inside the engine raise ValueError
@@ -210,7 +284,8 @@ def main(argv: list[str] | None = None) -> int:
     engs = _engagements(root)
     if args.only:
         engs = [e for e in engs if f"{e.parent.name}/{e.name}" == args.only]
-    lines = [f"decision replay · {len(engs)} engagement(s) · slots={SLOTS}", ""]
+    lines = [f"decision replay · {len(engs)} engagement(s) · "
+             f"client={row['client']} · slots={SLOTS} · as-of={os.environ['CBH_NOW']}", ""]
     for e in engs:
         try:
             lines += replay(e)

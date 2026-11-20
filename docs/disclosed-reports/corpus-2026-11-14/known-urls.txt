@@ -1,0 +1,155 @@
+https://adragos blog (site and title only; slug lost to compaction)
+https://bergee blog (site and title only; slug lost to compaction)
+https://blog.babelo.xyz/posts/cross-site-subdomain-leak/ and https://blog.arkark.dev/2025/12/26/etag-length-leak
+https://blog.doyensec.com/2024/07/02/cspt2csrf.html
+https://blog.faav.net/how-i-couldve-accessed-17-trillion-microsoft-records
+https://blog.flomb.net/posts/http2connect/
+https://blog.orange.tw/posts/2024-08-confusion-attacks-en/
+https://blog.orange.tw/posts/2025-01-worstfit-unveiling-hidden-transformers-in-windows-ansi/
+https://blog.orange.tw/posts/2026-10-the-last-proof-of-human-craft-browser-full-chain/
+https://blog.voorivex.team
+https://blog.voorivex.team/oauth-non-happy-path-to-ato
+https://blog.voorivex.team/oauth-token-theft-after-dompurify-two-chromium-techniques
+https://bobdahacker.com/blog/fifa-hack
+https://bugcrowd.com/disclosures/63864b55-10d6-4e82-a619-192b8c0c99ad/1-click-remote-code-execution-via-twitch-embed
+https://bugport blog (site and title only; slug lost to compaction)
+https://calif.io/php2shell
+https://castilho blog (site and title only; slug lost to compaction)
+https://cryptocat blog (site and title only; slug lost to compaction)
+https://cryptocat.me/blog/bug_bounty/2026/log_exposure_session_replay/
+https://cryptocat.me/blog/research/analysis/cve_2026_18442/
+https://cryptocat.me/blog/research/analysis/cve_2026_89093/
+https://eib blog (site and title only; slug lost to compaction)
+https://evil.blog/2024/12/doubleclickjacking-what.html
+https://flatt.tech
+https://focalsecurity blog (site and title only; slug lost to compaction)
+https://github.com/Metnew/write-ups/tree/main/claude-code-worktree-sandbox-escape
+https://github.com/vladko312/Research_Successful_Errors
+https://hackerone.com/reports/1087489
+https://hackerone.com/reports/1096609
+https://hackerone.com/reports/1154542
+https://hackerone.com/reports/1212067
+https://hackerone.com/reports/125980
+https://hackerone.com/reports/1328546
+https://hackerone.com/reports/1330529
+https://hackerone.com/reports/1439593
+https://hackerone.com/reports/1478633
+https://hackerone.com/reports/1618347
+https://hackerone.com/reports/1679624
+https://hackerone.com/reports/173551
+https://hackerone.com/reports/1819832
+https://hackerone.com/reports/1901040
+https://hackerone.com/reports/202781
+https://hackerone.com/reports/2032716
+https://hackerone.com/reports/2262382
+https://hackerone.com/reports/2293343
+https://hackerone.com/reports/2301565
+https://hackerone.com/reports/2443228
+https://hackerone.com/reports/300305
+https://hackerone.com/reports/307239
+https://hackerone.com/reports/3113398
+https://hackerone.com/reports/3124517
+https://hackerone.com/reports/312543
+https://hackerone.com/reports/3165242
+https://hackerone.com/reports/341876
+https://hackerone.com/reports/3694007
+https://hackerone.com/reports/3713965
+https://hackerone.com/reports/3782701
+https://hackerone.com/reports/383127
+https://hackerone.com/reports/3862641
+https://hackerone.com/reports/415081
+https://hackerone.com/reports/446585
+https://hackerone.com/reports/488147
+https://hackerone.com/reports/509924
+https://hackerone.com/reports/510152
+https://hackerone.com/reports/534450
+https://hackerone.com/reports/549882
+https://hackerone.com/reports/591813
+https://hackerone.com/reports/658013
+https://hackerone.com/reports/689314
+https://hackerone.com/reports/739737
+https://hackerone.com/reports/740989
+https://hackerone.com/reports/745324
+https://hackerone.com/reports/826361
+https://hackerone.com/reports/827052
+https://hackerone.com/reports/838635
+https://hackerone.com/reports/861940
+https://hackerone.com/reports/894569
+https://hackerone.com/reports/922456
+https://hackerone.com/reports/925585
+https://hackerone.com/reports/976603
+https://jeetbhdr blog (site and title only; slug lost to compaction)
+https://jeetbhdr.github.io/github-graphql-team-admin
+https://labs.snyk.io/resources/hijacking-oauth-flows-via-cookie-tossing/
+https://labs.watchtowr.com
+https://labs.watchtowr.com/death-by-a-thousand-papercuts-papercut-pre-auth-rce-chain-and-patch-bypasses-wt-2026-0141-0144-cve-2026-82077-cve-2026-82078-cve-2026-81578/
+https://labs.watchtowr.com/oh-look-the-foot-gun-went-off-again-citrix-netscaler-preauth-command-injection-cve-2026-88771/
+https://labs.watchtowr.com/you-wont-hear-about-these-even-in-myths-atlassian-jira-confluence-and-more-pre-auth-arbitrary-file-read-cve-2026-21589/
+https://lauritz blog (site and title only; slug lost to compaction)
+https://media.defcon.org/DEF%20CON%2032/DEF%20CON%2032%20presentations/DEF%20CON%2032%20-%20Paul%20Gerste%20-%20SQL%20Injection%20Isn%27t%20Dead%20Smuggling%20Queries%20at%20the%20Protocol%20Level.pdf
+https://mizu.re/post/dompurify-bypass-smil-animatetransform-safari
+https://mizu.re/post/exploring-the-dompurify-library-bypasses-and-fixes
+https://mll.sh
+https://nokline.github.io/bugbounty/2024/02/04/ChatGPT-ATO.html
+https://parsasec blog (site and title only; slug lost to compaction)
+https://parsasec.com/writeups/nextjs-server-actions/
+https://portswigger.net/research/can-ai-do-novel-security-research
+https://portswigger.net/research/crlf-powered-desync-attacks
+https://portswigger.net/research/css-the-bomb-inside-your-inbox
+https://portswigger.net/research/gotta-cache-em-all
+https://portswigger.net/research/http1-must-die
+https://portswigger.net/research/listen-to-the-whispers-web-timing-attacks-that-actually-work
+https://portswigger.net/research/scalable-vector-grief
+https://portswigger.net/research/smashing-the-token-limit
+https://portswigger.net/research/splitting-the-email-atom
+https://portswigger.net/research/stealing-httponly-cookies-with-the-cookie-sandwich-technique
+https://portswigger.net/research/the-fragile-lock
+https://portswigger.net/research/whats-in-a-tag-name-javascript-apparently
+https://projectdiscovery.io/blog/nextjs-middleware-authorization-bypass
+https://rez0 and xssdoctor hackbot (self-reported; site and title only)
+https://samcurry.net/hacking-subaru
+https://saurinn blog (site and title only; slug lost to compaction)
+https://saurinn.github.io/blog/from-input-to-shell/
+https://sebsrt blog (site and title only; slug lost to compaction)
+https://simonkoeck blog (site and title only; slug lost to compaction)
+https://simonkoeck.com/writeups/google-devsite-flask-session-pickle-rce
+https://siunam blog (site and title only; slug lost to compaction)
+https://slcyber.io
+https://slcyber.io/assetnote-security-research-center/
+https://slcyber.io/research-center/abusing-windows-net-quirks-and-unicode-normalization-to-exploit-dnn-dotnetnuke/
+https://slcyber.io/research-center/novel-ssrf-technique-involving-http-redirect-loops/
+https://watchtowr.com
+https://watchtowr.com/wp-content/uploads/SOAPwnwatchtowr_soappwn-research-whitepaper_10-12-2025.pdf
+https://writeups-2025-2026 note (FIFA item; site and title only)
+https://writeups-2025-2026 note (Flask itsdangerous item; site and title only)
+https://writeups-2025-2026 note (JWT upn item; site and title only)
+https://writeups-2025-2026 note (Microsoft Titan item; site and title only)
+https://writeups-2025-2026 note (phisher305 item; unverified, no vendor or date)
+https://writeups-2025-2026 note (small-data calibration item; site and title only)
+https://www.aikido.dev
+https://www.assetnote.io/resources/research/how-an-obscure-php-footgun-led-to-rce-in-craft-cms
+https://www.bugcrowd.com/blog/unveiling-te-0-http-request-smuggling-discovering-a-critical-vulnerability-in-thousands-of-google-cloud-websites/
+https://www.elttam.com
+https://www.elttam.com/blog/leaking-more-than-you-joined-for/
+https://www.intigriti.com/researchers/blog/news/php2shell
+https://www.microsoft.com/en-us/msrc/blog/2026/10/ssrf-impact-in-cloud-environments-beyond-network-reachability
+https://www.rcesecurity.com/2026/03/stackfield-desktop-app-rce-via-path-traversal-and-arbitrary-file-write-cve-2026-28373/
+https://www.slcyber.io/research/a-jpeg-a-race-and-a-ghost-breaking-discourses-image-pipeline
+https://www.slcyber.io/research/cache-me-if-you-can-xss-in-cloudflares-cdn-cgi-image
+https://www.slcyber.io/research/high-fidelity-detection-mechanism-for-rsc-next-js-rce-cve-2025-55182-cve-2025-66478
+https://www.slcyber.io/research/more-critical-bugs-in-adobe-experience-manager-pre-auth-rce
+https://www.wiz.io
+https://www.yeswehack.com/lab/research-cache-key-injection
+https://www.youtube.com/watch?v=Dq_KVLXzxH8
+https://www.youtube.com/watch?v=ETB2w-f3pM4
+https://www.zerodayinitiative.com/blog/2026/10/20/cve-2026-35273-ssrf-to-rce-in-oracle-peoplesoft
+https://xbow.com/labs/research/how-xbow-found-a-critical-rce-in-an-eac-voting-resource-calculator
+https://xbow.com/labs/research/zero-to-calc-in-six-days-inside-xbow-chrome-full-chain
+https://xssdoctor blog (site and title only; slug lost to compaction)
+https://zhero-web-sec.github.io
+https://zhero-web-sec.github.io/research-and-things/avoiding-the-paradox-a-native-full-read-ssrf-and-oneshot-dos-in-sveltekit
+https://zhero-web-sec.github.io/research-and-things/nextjs-and-the-corrupt-middleware
+https://zhero-web-sec.github.io/research-and-things/nextjs-cache-and-chains-the-stale-elixir
+https://zhero-web-sec.github.io/research-and-things/one-trigram-at-a-time-xsleak-via-universal-css-injection-and-dos-in-opera-(gx)
+https://zhero-web-sec.github.io/research-and-things/re-cache-excessive-reflection-type-confusion-and-0-click-sxss-on-nextjs
+https://zonduu.me/posts/meta-graphrag-rce/

@@ -154,8 +154,10 @@ loss to cross-session memory.
 - **Fan-out with no merge step.** Ten agents, ten partial truths, no single
   view of the target. Merge on `operation_id` / host, and debrief once.
 - **Asking the operator which role to run.** Pick it yourself. Blocked on
-  identity? That thread is closed and logged in `blocked-tests/`, not raised
-  as a question.
+  identity? Register one (`cbh identity new <url>`) — that is the lane's first
+  step. A wall there is ONE vector, logged in `blocked-tests/` without a
+  `**Park:**` line so it stays workable, and never raised as a question
+  (`cbh autonomy`).
 - **Using a subagent to bypass a gate.** Cross-session permission laundering
   is still gate-dodging. If a role cannot fire the request, neither can its
   helper.

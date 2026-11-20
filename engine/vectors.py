@@ -56,6 +56,25 @@ CATALOG: Dict[str, Dict] = {
                               "hint": "strip Authorization/Cookie entirely on every state-changing route"},
     "idor":                  {"impact": 90, "skill": "hunt-idor",
                               "hint": "swap the object id across two identities, then repeat on PUT/DELETE"},
+    # CVE-2026-123009: the server's OWN redirect carried `?from_base_branch=<branch>`, read
+    # back with no binding and no validator, and the write check then resolved against the
+    # attacker-owned repo the request targeted. Deliberately NOT in HINT_CLASSES: a manifest
+    # records no redirect, so seeding it from a risk hint would propose it everywhere. It
+    # reaches a ledger through the Cartesian seeder and through a lane that observed the
+    # signal.
+    # CVE-2026-114607: OAuth `state` records and magic-link tokens shared one `verification`
+    # store, indexed by token, with no column recording which flow created the row — so a
+    # record minted by one flow was accepted by the other flow's verifier and minted a session
+    # for an account the attacker does not own. Impact 92: it is an account takeover with no
+    # victim interaction.
+    "token-purpose":         {"impact": 92, "skill": "hunt-oauth",
+                              "hint": "feed a record minted by one auth flow to the verifier of "
+                                      "another (state -> magic-link, invite/reset -> the other "
+                                      "verifier); one store, two purposes, no type column"},
+    "redirect-param":        {"impact": 82, "skill": "hunt-idor",
+                              "hint": "census parameters that appear ONLY in a Location header, "
+                                      "then re-send them on the route the redirect pointed at; "
+                                      "a 400 may already have performed the write"},
     "business-logic":        {"impact": 88, "skill": "hunt-business-logic",
                               "hint": "negative/zero/overflow amounts, replay, step-skip, state-machine reorder"},
     "rce":                   {"impact": 98, "skill": "hunt-rce", "hint": "benign markers only (id, sleep)"},
@@ -256,6 +275,20 @@ CLASS_MUTATIONS["auth-bypass"] = CLASS_MUTATIONS["auth-bypass"] + [
 CLASS_MUTATIONS["idor"] = CLASS_MUTATIONS["idor"] + [
     "two identities + a tenant set up BEFORE the first payload (owner, member, outsider); "
     "ids taken from public share URLs / denial bodies / exports into destructive verbs",
+    # CVE-2026-126338: the direct read answers 404 while a nested reference makes the server
+    # copy the foreign object into one you own. A mutation on `idor`, not a class of its own,
+    # so it cannot double a host's ledger. NEVER a sweep: in the disclosed case the reference
+    # ids are one instance-wide sequence that does not reveal its tenant, so enumeration is
+    # unaimable and bans the source IP.
+    "nested reference on an id you ALREADY hold (reply/parent/source_id/template_id/copy_from): "
+    "the server copies the foreign object into yours while the direct route still 404s — "
+    "200 hit / 500 object exists but inner key wrong / 404 no such id",
+    # CVE-2026-118535: trust stored against a permanent object id and not revoked when the
+    # object changed owner. Needs a second identity we hold, so the lane is marked
+    # REGISTER FIRST rather than held back.
+    "transfer an object we own (repo/project/workspace/team) to our SECOND identity, then "
+    "enumerate what still trusts it: secrets, tokens, webhooks, scoped sources, allowlists — "
+    "trust stored against a permanent id survives the change of owner",
 ]
 CLASS_MUTATIONS["business-logic"] = CLASS_MUTATIONS["business-logic"] + [
     "client-supplied fields that should be server-side: price/resident/role/template/destination "
@@ -271,6 +304,24 @@ CLASS_MUTATIONS["business-logic"] = CLASS_MUTATIONS["business-logic"] + [
     "import/export round-trip: export your own object, add admin-only booleans (template, role, "
     "custom_attributes) or framework setters (remote_<field>_url), re-import",
 ]
+CLASS_MUTATIONS.setdefault("token-purpose", [])
+CLASS_MUTATIONS["token-purpose"] = CLASS_MUTATIONS["token-purpose"] + [
+    "census first: does the app run TWO token flows (OAuth state + magic-link / invite / "
+    "password-reset / device-code)? one store with no type column is the whole bug",
+    "a `state` record submitted to the magic-link verifier — put the victim address in the "
+    "field that verifier reads, not at the top level of the body (CVE-2026-114607)",
+    "a magic-link / invite / reset token submitted to the OAuth state consumer",
+    "same token twice across the two verifiers: does either consume it, or do both accept it?",
+]
+CLASS_MUTATIONS.setdefault("redirect-param", [])
+CLASS_MUTATIONS["redirect-param"] = CLASS_MUTATIONS["redirect-param"] + [
+    "corpus diff: every parameter present in a Location value and absent from the request that "
+    "produced it, re-sent on the route the redirect pointed at",
+    "the same parameter after the grant on the SOURCE object is revoked — the check may resolve "
+    "against the destination you own",
+    "read the object back after a 4xx: in CVE-2026-123009 the push ran before the stale-commit "
+    "check, so a 400 had already created and populated the branch",
+]
 CLASS_MUTATIONS.setdefault("open-redirect", [])
 CLASS_MUTATIONS["open-redirect"] = CLASS_MUTATIONS["open-redirect"] + [
     "consumer: chain into an OAuth redirect_uri / Dynamic Client Registration / logout returnTo "
@@ -280,6 +331,14 @@ CLASS_MUTATIONS.setdefault("cache-poison", [])
 CLASS_MUTATIONS["cache-poison"] = CLASS_MUTATIONS["cache-poison"] + [
     "composition: a self-XSS / X-Forwarded-Host redirect / reflected cookie becomes critical "
     "once the cache key is controllable — prove keying with two request-ids, own session",
+    # Next.js Cache Components, Nov 2026. DETERMINISTIC arms only: the cold-fill race
+    # (CVE-2026-119790) needs concurrent requests, which is blast radius on other users and
+    # availability, so it is deliberately absent from the matrix.
+    "cache IDENTITY, not cache key: two calls whose arguments differ only in a way the identity "
+    "hash flattens (binary/Buffer args, Date, a class instance) — CVE-2026-119349",
+    "nested cached function: does the OUTER entry get stored before the INNER one's root "
+    "parameters (tenant/locale/user) are recorded? CVE-2026-119351 — vary the inner scope with "
+    "the outer arguments held still",
 ]
 CLASS_MUTATIONS.setdefault("file-upload", [])
 CLASS_MUTATIONS["file-upload"] = CLASS_MUTATIONS["file-upload"] + [
@@ -308,6 +367,12 @@ CONSUMERS: Dict[str, List[str]] = {
     "host-header": ["password-reset link poisoning -> ATO", "cache poisoning of canonical/redirect"],
     "file-upload": ["served from app origin as HTML -> stored XSS", "server-side parser (ExifTool/XML/archive) -> RCE/XXE"],
     "idor": ["PUT/DELETE on the same id", "id from public share URL / denial body into destructive call"],
+    "token-purpose": ["a session for an account we do not own -> ATO (read /me back to prove it)",
+                      "a fresh emailVerified account created for an address we do not control",
+                      "the second factor skipped, because the other flow never asked for one"],
+    "redirect-param": ["read of an object the caller cannot reach on its own route",
+                       "write on that object (the push/copy the parameter drives)",
+                       "access that survived a revocation — re-test after the grant is removed"],
     "auth-bypass": ["admin function -> data of all users", "sibling interface without the check"],
     "csrf": ["email/password/2FA change -> ATO"],
     "cache-poison": ["stored XSS for all", "token/session in a cached response"],
@@ -409,7 +474,9 @@ HINT_CLASSES: Dict[str, List[str]] = {
     "business-flow":          ["business-logic"],
     "state-change":           ["csrf"],
     "declared-public":        ["missing_authorization"],
-    "oauth":                  ["auth-bypass", "open-redirect"],
+    # `token-purpose` rides the oauth hint deliberately and nothing broader: the bug needs a
+    # second token flow to exist, and an oauth-hinted operation is where one is.
+    "oauth":                  ["auth-bypass", "open-redirect", "token-purpose"],
     "graphql":                ["graphql"],
 }
 

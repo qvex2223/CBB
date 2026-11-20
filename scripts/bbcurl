@@ -48,7 +48,8 @@ ENGINE = Path(__file__).resolve().parent.parent / "engine"
 sys.path.insert(0, str(ENGINE))
 
 import responses  # noqa: E402
-from pacing import Engagement, MissingRequiredHeader, ThrottledHost  # noqa: E402
+from pacing import (Engagement, MissingRequiredCookie, MissingRequiredHeader,  # noqa: E402
+                    ThrottledHost)
 from request_broker import RequestBroker, RequestBlocked, is_local_url  # noqa: E402
 from scope import _scope_from_md  # noqa: E402
 
@@ -269,6 +270,114 @@ def _explicit_header_names(argv):
     return names
 
 
+def _cookie_arg(argv):
+    """(index, value, inline) for the LAST -b/--cookie on the line, or (None, "", False).
+
+    curl spells it `-b V`, `-bV`, `--cookie V` and `--cookie=V`. The value is a cookie
+    STRING when it contains `=`; otherwise curl reads it as a FILE of cookies, and the two
+    cannot be merged as text. `index` points at the element holding the value, so a string
+    can be rewritten in place — appending a second `-b` would not merge, it would replace.
+    """
+    found = (None, "", False)
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-b", "--cookie") and i + 1 < len(argv):
+            found, i = (i + 1, argv[i + 1], "=" in argv[i + 1]), i + 2
+        elif a.startswith("--cookie="):
+            v = a[len("--cookie="):]
+            found, i = (i, a, "=" in v), i + 1
+        elif a.startswith("-b") and len(a) > 2:
+            v = a[2:]
+            found, i = (i, a, "=" in v), i + 1
+        else:
+            i += 1
+    return found
+
+
+def _cookie_names(value, inline):
+    if not inline:
+        return set()
+    raw = value
+    for pre in ("--cookie=", "-b"):
+        if raw.startswith(pre):
+            raw = raw[len(pre):]
+            break
+    out = set()
+    for part in raw.split(";"):
+        if "=" in part:
+            out.add(part.split("=", 1)[0].strip().lower())
+    return out
+
+
+def _merge_required_cookies(argv, eng):
+    """Put the programme's mandatory cookies on this request without dropping anything.
+
+    A cookie is NOT deliverable as a header: curl lets an explicit `-H "Cookie: ..."`
+    replace the header it builds from `-b`, so expressing a mandatory cookie as a required
+    HEADER silently de-authenticates any lane carrying a session jar. So it is merged into
+    `-b` instead, and only what is missing is added.
+
+    Three shapes, and the third is why this warns instead of blocking: a `-b` pointing at a
+    cookie FILE cannot be merged as text, and this runs in the live request path of an armed
+    hunt — refusing there would kill working lanes over a cookie they may well already be
+    sending from the jar. The warning names what could not be merged and the request goes.
+    """
+    idx, value, inline = _cookie_arg(argv)
+    try:
+        missing = eng.apply_cookies({k: "" for k in _cookie_names(value, inline)})
+    except MissingRequiredCookie as e:
+        return argv, [], f"BLOCKED {e}"
+    if not missing:
+        return argv, [], ""
+    pairs = "; ".join(f"{k}={v}" for k, v in missing.items())
+    if idx is None:
+        return argv, ["-b", pairs], ""
+    if not inline:
+        return argv, [], (f"WARNING  -b reads a cookie FILE, so the programme's required "
+                          f"cookie(s) {', '.join(missing)} could not be merged into it. "
+                          f"Add them to the jar, or pass them inline as -b 'name=value'.")
+    argv = list(argv)
+    cur = argv[idx]
+    for pre in ("--cookie=", "-b"):
+        if cur.startswith(pre) and len(cur) > len(pre):
+            argv[idx] = f"{cur}; {pairs}"
+            return argv, [], ""
+    argv[idx] = f"{cur}; {pairs}"
+    return argv, [], ""
+
+
+CAIDO_HOST = os.environ.get("CBH_CAIDO_HOST", "127.0.0.1")
+CAIDO_PORT = int(os.environ.get("CBH_CAIDO_PORT", "8080"))
+
+
+def _caido_route_error(pins: dict[str, str]) -> str:
+    """Why this request cannot go through Caido, or "" when it can.
+
+    Through an HTTP proxy curl does not connect to the target itself, so a
+    `--resolve`/`--connect-to` pin stops binding the connection: Caido resolves the
+    name on its own. The scope gate checked the pinned address, so the request is only
+    allowed when the name already resolves to that same address on this box.
+    """
+    import socket
+    try:
+        with socket.create_connection((CAIDO_HOST, CAIDO_PORT), timeout=1.0):
+            pass
+    except OSError:
+        return (f"Caido is not listening on {CAIDO_HOST}:{CAIDO_PORT} "
+                "(start it: scripts/caido-up.sh)")
+    for host, ip in pins.items():
+        try:
+            resolved = {a[4][0] for a in socket.getaddrinfo(host, None)}
+        except OSError:
+            resolved = set()
+        if ip not in resolved:
+            return (f"{host} is pinned to {ip}, but through a proxy Caido resolves the name "
+                    f"itself and this box resolves it to {sorted(resolved) or 'nothing'}; "
+                    "the pin would not hold")
+    return ""
+
+
 def main(argv: list[str]) -> int:
     dry_run = "--bb-dry-run" in argv
     argv = [a for a in argv if a != "--bb-dry-run"]
@@ -279,12 +388,27 @@ def main(argv: list[str]) -> int:
     # a response the operator does not want on disk at all.
     no_store = "--bb-no-store" in argv
     argv = [a for a in argv if a != "--bb-no-store"]
+    # --bb-caido (or CBH_BBCURL_CAIDO=1): send this request through the Caido proxy so it
+    # lands in Caido's history next to the browser lane's traffic and can be replayed or
+    # exported as evidence. Added 2026-11-20: bbcurl never went through Caido, so a proven
+    # PoC had no Caido capture and Caido sat unused. The proxy is appended AFTER the URL
+    # list is extracted, so it is never scope-checked as a target, and it is refused
+    # rather than skipped when Caido is down (a silent direct fallback was the old
+    # Playwright bug).
+    via_caido = "--bb-caido" in argv or os.environ.get("CBH_BBCURL_CAIDO") == "1"
+    argv = [a for a in argv if a != "--bb-caido"]
     if not argv:
         print("usage: bbcurl [curl args...] URL", file=sys.stderr)
         return 2
 
     urls = extract_urls(argv)
     pins = extract_pins(argv)
+    if via_caido:
+        err = _caido_route_error(pins)
+        if err:
+            print(f"bbcurl: --bb-caido REFUSED — {err}. Nothing was sent.", file=sys.stderr)
+            return 2
+        argv = [*argv, "-x", f"http://{CAIDO_HOST}:{CAIDO_PORT}", "-k"]
     eng = Engagement.detect()
 
     if eng.name is None:
@@ -367,7 +491,15 @@ def main(argv: list[str]) -> int:
             continue  # explicitly set by hand on this command line — leave it alone
         header_args += ["-H", f"{key}: {value}"]
 
-    cmd = ["curl", *header_args, *argv]
+    # 2b. Mandatory cookies — merged into -b, never emitted as -H "Cookie:".
+    argv, cookie_args, cookie_note = _merge_required_cookies(argv, eng)
+    if cookie_note.startswith("BLOCKED"):
+        print(f"bbcurl: {cookie_note}", file=sys.stderr)
+        return 2
+    if cookie_note:
+        print(f"bbcurl: {cookie_note}", file=sys.stderr)
+
+    cmd = ["curl", *header_args, *cookie_args, *argv]
 
     # Multi-URL batches: curl fires them back to back, so one pacing wait would
     # under-pace the programme by a factor of N. Computed here so --bb-dry-run
@@ -423,7 +555,11 @@ def main(argv: list[str]) -> int:
     if not any(a == "-w" or a == "--write-out" or a.startswith("--write-out=") for a in argv):
         fd, stats_path = tempfile.mkstemp(prefix="bbcurl-", suffix=".json")
         os.close(fd)
-        cmd = ["curl", "-w", "%output{" + stats_path + "}%{json}", *header_args, *argv]
+        # `*cookie_args` as well: this REBUILDS the command, and leaving it out dropped
+        # the programme-mandated cookie on every request that did not bring its own -w
+        # — i.e. almost all of them.
+        cmd = ["curl", "-w", "%output{" + stats_path + "}%{json}",
+               *header_args, *cookie_args, *argv]
 
     # Body capture. curl can only write the body to one place, so when the caller
     # has not claimed it we take it into a temp file and replay it to stdout after
@@ -513,7 +649,11 @@ def main(argv: list[str]) -> int:
     if captured and not responses.disabled():
         entry.update(responses.save(eng.name, Path(captured),
                                     Path(hdr_path) if hdr_path else None))
-        entry["req"] = responses.redact(argv)
+        # `cookie_args + argv`, in the order they reach curl: an inline -b is rewritten in
+        # argv, but a -b this wrapper ADDED lives only in cookie_args, and an audit row
+        # that omits it does not describe the request that was sent. The values are
+        # redacted either way, so this records that a cookie went, never which.
+        entry["req"] = responses.redact([*cookie_args, *argv])
     # 5b. Wire signals (advisory): body on a 3xx, data inside a refusal, a secret in
     #     the body. Read from the RAW capture before the temp file goes away; the
     #     stored copy is scrubbed. hunt-nudge prints them; nothing here can fail a run.

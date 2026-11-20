@@ -1671,9 +1671,39 @@ def _memory(args: argparse.Namespace):
                   max_mb=getattr(args, "max_mb", None) or 10)
 
 
+def _infer_remember_target() -> str:
+    """The engagement this call is sitting in, for `cbh remember --target`.
+
+    Measured 2026-11-13: two worker lanes lost a call each to
+    `cbh remember: error: the following arguments are required: --target, --vuln-class,
+    --endpoint` — both were inside `Targets/rteam/activ` with CBH_PROJECT set, so the one
+    argument the toolkit could answer itself was the one that stopped them. The class and
+    the endpoint still have to be stated: nothing here can infer which claim is being
+    banked.
+    """
+    proj = (os.environ.get("CBH_PROJECT") or "").strip().strip("/")
+    if proj:
+        return proj.rsplit("/", 1)[-1]
+    eng = _engagement_dir()
+    return eng.name if eng is not None else ""
+
+
 def cmd_remember(args: argparse.Namespace) -> int:
     m = _memory(args)
     if m is None:
+        return 2
+    args.target = args.target or _infer_remember_target()
+    missing = [flag for flag, value in (("--vuln-class", args.vuln_class),
+                                        ("--endpoint", args.endpoint),
+                                        ("--target", args.target)) if not value]
+    if missing:
+        say(color(f"  cbh remember needs {', '.join(missing)}", "red"))
+        say("  --target is read from CBH_PROJECT or the engagement folder when you omit it;")
+        say("  the class and the endpoint are yours to state. Full shape:")
+        say('    cbh remember --result rejected --vuln-class idor \\')
+        say('                 --endpoint "GET /api/v1/orders/{id}" \\')
+        say('                 --severity low --notes "why it is not a finding"')
+        say("  --note is accepted as an alias of --notes. `cbh remember --help` for the rest.")
         return 2
     entry = {
         "target": args.target, "vuln_class": args.vuln_class, "endpoint": args.endpoint,
@@ -1832,7 +1862,12 @@ ENGINE_MODULES = {
     "debrief": "session_debrief", "learn": "learn", "dedup": "dedup",
     "doctor": "workspace_check", "queue": "operator_queue", "limits": "limits", "chain-graph": "chain_graph", "yield": "yield_report", "errors": "error_log", "crew": "crew",
     "browser": "browser_doctor", "doctrine": "doctrine", "hunt-start": "hunt_start", "leads": "lead_queue", "hunt-stop": "hunt_stop", "precedent": "precedent", "census": "surface_census", "diffprobe": "differential_probe", "corpus-gap": "corpus_gap", "client": "client",
-    "autohunt": "autohunt", "skill-graph": "skill_graph",
+    "autohunt": "autohunt", "skill-graph": "skill_graph", "autonomy": "autonomy",
+    "adoption": "adoption",
+    # `/poc-run` had no CLI twin, so on a client without slash commands the one step that
+    # turns a claim into a `.result.json` was reachable only by naming the module path.
+    "poc-run": "poc_runtime",
+    "handback-verify": "handback_verify",
 }
 
 
@@ -1940,7 +1975,7 @@ def main() -> int:
     # Same reason for `limits` (--days/--json/--brief) and `errors`
     # (--since/--kind/--tool/--raw/--brief): their flags lead the remainder.
     if len(sys.argv) > 1 and sys.argv[1] in ("limits", "errors", "crew", "hunt-start", "hunt-stop", "leads", "client",
-                               "autohunt", "skill-graph"):
+                               "autohunt", "skill-graph", "autonomy"):
         ns = argparse.Namespace(command=sys.argv[1], rest=sys.argv[2:], tool_help=False)
         return cmd_engine_tool(ns)
     parser = argparse.ArgumentParser(
@@ -2001,6 +2036,24 @@ def main() -> int:
                                "PoC artifact (weaker; for drafts only)")
     p_triage.set_defaults(func=cmd_triage)
 
+    # `cbh validate` is an ALIAS of `cbh triage`, deliberately not a second driver.
+    # `commands/validate.md` is the step every client is told to run before a report, and a
+    # client with no slash commands (engine/client.py's `generic` row — Grok takes it) can
+    # only reach it through the CLI. Building a separate validate engine would put two
+    # drivers in front of one gate, and the day they disagree the weaker verdict is the one
+    # that gets reported. Same function, same flags, same exit codes.
+    p_validate = sub.add_parser("validate",
+                                help="alias of `triage`: the 7-Question Gate on a finding")
+    for a in ("finding",):
+        p_validate.add_argument(a, help="path to finding markdown file")
+    p_validate.add_argument("--no-refute", action="store_true", dest="no_refute",
+                            help="do not require a `cbh refute` record before PASS (drafts only)")
+    p_validate.add_argument("--demote", action="store_true",
+                            help="on DOWNGRADE/KILL, move the file down the funnel")
+    p_validate.add_argument("--no-evidence", action="store_true",
+                            help="answer Q1/Q6 from the finding text instead of a fired PoC")
+    p_validate.set_defaults(func=cmd_triage)
+
     p_ev = sub.add_parser("evidence", help="is a finding backed by a fired PoC (.result.json)?")
     p_ev.add_argument("path", help="finding markdown, engagement dir, or a .result.json")
     p_ev.set_defaults(func=cmd_evidence)
@@ -2039,10 +2092,11 @@ def main() -> int:
 
     # ---- hunt memory (backs /remember, /pickup, /memory-gc) ----
     p_rem = sub.add_parser("remember", help="log a finding/attempt to persistent hunt memory")
-    p_rem.add_argument("--target", required=True)
-    p_rem.add_argument("--vuln-class", required=True, dest="vuln_class",
+    p_rem.add_argument("--target", default="",
+                       help="default: CBH_PROJECT, else the engagement folder you are in")
+    p_rem.add_argument("--vuln-class", dest="vuln_class",
                        help="e.g. idor, ssrf, business-logic")
-    p_rem.add_argument("--endpoint", required=True)
+    p_rem.add_argument("--endpoint")
     p_rem.add_argument("--result", required=True,
                        choices=["confirmed", "rejected", "partial", "informational",
                                 "duplicate", "submitted", "accepted", "paid", "na",
@@ -2052,7 +2106,9 @@ def main() -> int:
     p_rem.add_argument("--technique", help="short slug, e.g. numeric_id_swap_on_put")
     p_rem.add_argument("--tech", help="comma-separated stack, e.g. 'Next.js,GraphQL'")
     p_rem.add_argument("--tags", help="comma-separated tags")
-    p_rem.add_argument("--notes")
+    # `--note` is what half the call sites write, and argparse answered it with the
+    # required-arguments error instead of the typo (2026-11-13).
+    p_rem.add_argument("--notes", "--note", dest="notes")
     p_rem.add_argument("--dir", help="hunt-memory directory (default: $CBH_MEMORY_DIR)")
     p_rem.set_defaults(func=cmd_remember)
 
@@ -2115,6 +2171,9 @@ def main() -> int:
                         "escalates, and the class pairs 120 disclosed reports paid for "
                         "(`--ladder <url>`, `--chains`, `--lint`)"),
         ("crew", "how many workers THIS engagement's pacing budget can actually feed, and why"),
+        ("autonomy", "the closed list of reasons a vector may still be parked for the operator "
+                     "(everything else is fired without asking); `--reclassify <eng>` grades that "
+                     "engagement's blocked-tests/, `--reopen` puts the fireable ones back in the queue"),
         ("client", "which agent CLI drives this session and what changes because of it "
                    "(crew size, may you send, gates, how skills/commands/subagents load) — read it before the first request; `--list` shows every client row"),
         ("precedent", "what a PAID disclosed report did first on this shape: "
@@ -2125,6 +2184,12 @@ def main() -> int:
         ("hunt-start", "start a hunt on <program>: arm + orders"),
         ("hunt-stop", "disarm hunt mode for this session"),
         ("doctrine", "the crit/high doctrine every skilled worker brief carries (never freeroam)"),
+        ("handback-verify", "do a worker's citations exist? greps the urls, sha256s and paths "
+                            "out of a hand-back and resolves each against audit.jsonl (plus "
+                            "rotations) and the response corpus; non-zero exit on any miss"),
+        ("adoption", "is a registered vector class actually used, or a dead file? seeded/offered/"
+                     "fired/closed per class from the ledgers, audit.jsonl and the funnel; "
+                     "`--lint` prints only the broken rows, `--class <c>` one class in detail"),
         ("corpus-gap", "would the toolkit have found each disclosed crit/high report? (coverage + backlog)"),
         ("diffprobe", "detection-only parser-differential probe of ONE url via bbcurl (~14 GETs, paced)"),
         ("census", "offline surface census: sibling interfaces, server-side fetchers, secret leads (--seed to the ledger)"),

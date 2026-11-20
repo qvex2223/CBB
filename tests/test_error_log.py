@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -126,6 +127,28 @@ class Durability(unittest.TestCase):
             EL.append(EL.row_for(ev(tool_response={"exit_code": 1, "stderr": "boom"})), Path(td))
             future = datetime.now(timezone.utc).replace(year=2099)
             self.assertEqual([], EL.load(Path(td), since=future))
+
+    def test_a_row_names_its_client_and_legacy_rows_are_inferred(self):
+        with mock.patch.dict(os.environ, {"CBH_AGENT": "claude"}):
+            row = EL.row_for(ev(tool_response={"exit_code": 1, "stderr": "boom"}))
+        self.assertEqual("claude", row["client"])
+        self.assertEqual("claude", EL.row_client({"tool": "Bash"}))
+        self.assertEqual("claude", EL.row_client({"tool": "mcp__playwright__browser_click"}))
+        self.assertEqual("other", EL.row_client({"tool": "run_terminal_command"}))
+        self.assertEqual("other", EL.row_client({"tool": "playwright__browser_navigate"}))
+
+    def test_the_brief_counts_this_clients_errors_and_names_the_rest(self):
+        # 2026-11-20: 250 of 314 rows were another client's; the brief was mostly noise.
+        with tempfile.TemporaryDirectory() as td:
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            for tool in ("Bash", "run_terminal_command", "run_terminal_command"):
+                EL.append({"ts": now, "kind": "nonzero_exit", "tool": tool}, Path(td))
+            env = dict(os.environ, CBH_MEMORY_DIR=td, CBH_AGENT="claude")
+            out = subprocess.run([sys.executable, str(REPO / "engine" / "error_log.py"),
+                                  "--brief"], capture_output=True, text=True, env=env,
+                                 timeout=60).stdout
+            self.assertIn("ERRORS (24h, claude): 1 ", out)
+            self.assertIn("other clients 2", out)
 
     def test_concurrent_sessions_do_not_interleave_a_row(self):
         """Several sessions share one file; a torn line would be unparseable."""

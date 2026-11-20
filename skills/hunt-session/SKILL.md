@@ -268,3 +268,22 @@ Before claiming ANY session finding:
 - Predictable/duplicate session ID: **High**
 - No invalidation on logout: **Medium → High** (depends on theft vector)
 - Missing `HttpOnly`/`SameSite` standalone: **Low/Informational** until chained
+
+---
+
+## Where does this token live, and what else lives there?
+
+Session work usually asks whether a token is *valid*. Ask the other question too: which flow
+**minted** it, and is that written down. A verification store shared by two flows — OAuth `state`
+beside magic-link, invite or password-reset tokens — with no column naming the flow lets a record
+minted by one be redeemed by the other, and the redeeming verifier issues a real session for
+whatever identity the row happens to carry (CVE-2026-114607).
+
+Signals: one table or key prefix serving several token kinds; a `verification` / `tokens` /
+`one_time_codes` store whose rows differ only by which endpoint reads them; a config option
+choosing where state is kept (cookie against database) — because the database setting is what puts
+the two kinds in one place.
+
+Declare it `**Class:** token-purpose`. **SKIP** — `hunt-oauth` carries the full write-up and the
+worked endpoints; this entry exists so a session review does not stop at "the token was valid".
+

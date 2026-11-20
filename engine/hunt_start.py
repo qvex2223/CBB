@@ -55,6 +55,17 @@ CLIENT MAPPING ({client}) — the orders below are written in Claude Code terms:
   flagged RETRY), never `--as blocked` (that is for the target or the programme blocking
   it, and it takes the lead out of the queue). `cbh leads reopen <file> --note "why"`
   undoes a mis-marked block.
+- NOTHING KEEPS THIS HUNT ALIVE BUT YOU. `engine/stop_gate.py` is a Claude Code `Stop`
+  hook, and you do not emit that event, so continuous mode cannot reach you: measured
+  2026-11-14, 0 of the 59 sessions in `hunt-memory/pacing/stop_gate.json` came from a
+  non-Claude client, i.e. the gate has never once run for one. So after EVERY wave lands,
+  re-run `cbh autohunt` and act on its `Stop gate:` line — that line is the whole
+  mechanism you get, it prints both verdicts, and for you it is advisory.
+  A finding is never a reason to stop and never a reason to open new surface either:
+  bank it in `findings/` with its `.result.json`, confirm it (`cbh refute` + `cbh triage`;
+  a KILL is answered with `cbh triage <f> --demote`, never an argument), and only then take
+  the next vector. While a finding this hunt claimed is unconfirmed, `cbh autohunt` prints
+  `CONFIRM FIRST` and the whole wave may go to confirmation.
 - Stop the hunt only when the operator says so; then run `cbh hunt-stop`."""
 
 
@@ -160,7 +171,7 @@ def main(argv=None) -> int:
     except Exception:  # noqa: BLE001
         pass
     try:
-        line = ha.caido_line()
+        line = ha.caido_line(project)
         if line:
             print()
             print(line)

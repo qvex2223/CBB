@@ -35,8 +35,9 @@ digest, and moves straight into verification.
    open thread.
 6. **Close the loop.** Mark each lead as it resolves:
    ```
-   python3 scripts/cve-digest.py --mark CVE-2026-65637 --status checked   --note "Tomcat 9.0.85, not in affected range"
+   python3 scripts/cve-digest.py --mark CVE-2026-65637 --status below-range-unverified --note "Tomcat 9.0.85, below the stated range, PoC not fired"
    python3 scripts/cve-digest.py --mark CVE-2026-65640 --status dismissed --note "no /wp-admin, WP is a static export"
+   python3 scripts/cve-digest.py --mark CVE-2026-65641 --status checked    --note "PoC fired, 404 on the vulnerable handler"
    ```
    Then `/remember` the result — confirmed *and* rejected both count.
 
@@ -63,6 +64,15 @@ Each digest row now prints a `lane:` line (`scripts/cve-digest.py::lane`):
 
 - **Never test a version you have not confirmed live.** Reporting a CVE off a
   stale watchlist entry is exactly how an N/A submission happens.
+- **An affected-version range is not an oracle.** A live version *below* the stated range does
+  not close the row — it is `--status below-range-unverified`, never `checked`. CrossPloit
+  (arXiv 2611.16588) confirmed **149 vulnerable prior releases absent from the affected-version
+  lists of four databases**, and the best agent configuration triggered the vulnerability on an
+  unlisted earlier version in **58.3%** of 127 instances. Two caveats that come with that
+  number: it assumes a working reference PoC is in hand (one configuration fell from 50.4% to
+  15.0% without the PoC and the environment spec), and cases needing an attack-vector shift
+  never exceeded 37.9%. So: fingerprint the version, then let a fired PoC decide — `checked`
+  means a request went out, not that a range was read.
 - Pacing and mandatory headers are enforced by `engine/pacing.py` — use `bbcurl`,
   not bare `curl`, so the request is scoped, paced and audited.
 - No Low/Info submissions. A confirmed-but-unexploitable CVE is a logged

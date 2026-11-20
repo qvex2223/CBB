@@ -173,10 +173,17 @@ class WrapperWiring(unittest.TestCase):
         src = (ROOT / "runtime" / "playwright-mcp.mjs").read_text()
         self.assertIn("acquireProfileLock", src)
         self.assertIn("busyMessage", src)
+        self.assertIn("overlayRepoMcpEnv", src)
+        i_overlay = src.index("overlayRepoMcpEnv(")
         i_lock = src.index("acquireProfileLock(profileDir")
         i_args = src.index("'--user-data-dir'")
+        self.assertLess(i_overlay, i_lock,
+                        ".mcp.json env overlay must run before the profile lock")
         self.assertLess(i_lock, i_args,
                         "the lock must be taken before --user-data-dir is handed to Chromium")
+        self.assertIn("firefoxUserPrefs", src)
+        self.assertIn("network.http.http2.enabled", src)
+        self.assertIn("contextOptions", src)
 
 
 if __name__ == "__main__":

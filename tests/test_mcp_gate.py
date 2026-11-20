@@ -37,7 +37,12 @@ class McpGate(unittest.TestCase):
     def run_gate(self, tool, tool_input, cwd=None, env=None):
         payload = json.dumps({"tool_name": tool, "tool_input": tool_input,
                               "session_id": "t", "transcript_path": ""})
-        e = dict(os.environ, CBH_MEMORY_DIR=str(self.memdir))
+        # See the note in tests/test_crew_gate.py: pin the client row this asserts, or a
+        # suite launched from a non-Claude process inherits that row and the hook correctly
+        # declines to gate, which reads as a failure.
+        e = dict(os.environ, CBH_MEMORY_DIR=str(self.memdir), CBH_AGENT="claude")
+        e.pop("GROK_AGENT", None)
+        e.pop("GROK_SESSION_ID", None)
         e["PYTHONPATH"] = str(ROOT / "engine")
         e.update(env or {})
         r = subprocess.run([sys.executable, "-B", str(GATE)], input=payload,
@@ -149,6 +154,52 @@ class McpGate(unittest.TestCase):
         self.assertIsNone(self.run_gate(
             "mcp__playwright__browser_run_code_unsafe",
             {"code": "async (page) => page.evaluate(() => document.title)"}))
+
+    # Grok session 01a1ea8b (intigriti/1password, 2026-11-18): target API calls fired from
+    # inside the page / extension service worker with relative paths, and from script FILES,
+    # passed the gate unseen — 14 browser audit rows against ~110 requests two lanes reported.
+    def test_relative_fetch_is_refused_with_the_caido_remedy(self):
+        d = self.run_gate("mcp__playwright__browser_evaluate",
+                          {"function": "async () => (await fetch('/api/v3/auth/start', "
+                                       "{method: 'POST'})).status"})
+        self.assertEqual(d["permissionDecision"], "deny")
+        self.assertIn("caido_list_requests", d["permissionDecisionReason"])
+
+    def test_client_request_method_with_a_bare_path_is_refused(self):
+        d = self.run_gate("mcp__playwright__browser_run_code_unsafe",
+                          {"code": "async (page) => sw.evaluate(() => "
+                                   "CTX.session.request({path: '/api/v2/overview'}))"})
+        self.assertEqual(d["permissionDecision"], "deny")
+
+    def test_naming_the_target_in_a_comment_gates_and_audits_it(self):
+        """Positive control: the in-client lane keeps working once it names its targets."""
+        self.assertIsNone(self.run_gate(
+            "mcp__playwright__browser_run_code_unsafe",
+            {"code": "// https://my.acme.com/api/v2/overview\n"
+                     "async (page) => sw.evaluate(() => CTX.session.request({path: '/api/v2/overview'}))"}))
+        self.assertIn("https://my.acme.com/api/v2/overview",
+                      json.dumps(self.audit_rows()[-1]))
+
+    def test_wrapping_fetch_to_observe_is_not_a_send(self):
+        self.assertIsNone(self.run_gate(
+            "mcp__playwright__browser_evaluate",
+            {"function": "() => { const orig = self.fetch; self.fetch = async function(i, o)"
+                         " { return origFetch(i, o); }; return typeof fetch; }"}))
+
+    def test_a_script_file_is_read_and_gated(self):
+        f = self.root / "probe.js"
+        f.write_text("async (page) => { await page.goto('https://evil.example.com/x'); }")
+        d = self.run_gate("mcp__playwright__browser_run_code_unsafe", {"filename": str(f)})
+        self.assertEqual(d["permissionDecision"], "deny")
+        f.write_text("async (page) => { await page.goto('https://www.acme.com/a'); }")
+        self.assertIsNone(self.run_gate("mcp__playwright__browser_run_code_unsafe",
+                                        {"filename": str(f)}))
+        self.assertEqual(self.audit_rows()[-1]["tool"], "mcp__playwright__browser_run_code_unsafe")
+
+    def test_an_unreadable_script_file_is_refused(self):
+        d = self.run_gate("mcp__playwright__browser_run_code_unsafe",
+                          {"filename": str(self.root / "missing.js")})
+        self.assertEqual(d["permissionDecision"], "deny")
 
     def test_run_code_control_urls_pass(self):
         self.assertIsNone(self.run_gate(
@@ -392,7 +443,12 @@ class McpGate(unittest.TestCase):
         self.assertIsNone(self.run_gate("Bash", {"command": "curl https://evil.example.com"}))
 
     def test_a_malformed_event_never_wedges_the_session(self):
-        e = dict(os.environ, CBH_MEMORY_DIR=str(self.memdir))
+        # See the note in tests/test_crew_gate.py: pin the client row this asserts, or a
+        # suite launched from a non-Claude process inherits that row and the hook correctly
+        # declines to gate, which reads as a failure.
+        e = dict(os.environ, CBH_MEMORY_DIR=str(self.memdir), CBH_AGENT="claude")
+        e.pop("GROK_AGENT", None)
+        e.pop("GROK_SESSION_ID", None)
         r = subprocess.run([sys.executable, "-B", str(GATE)], input="not json",
                            capture_output=True, text=True, timeout=60, cwd=str(self.project), env=e)
         self.assertEqual(r.returncode, 0)

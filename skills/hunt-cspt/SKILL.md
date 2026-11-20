@@ -74,9 +74,9 @@ path. The victim needs no link and no interaction: they open their own dashboard
 ```
 A stored traversal whose gadget writes back to the same field for **other** accounts is
 self-propagating. That is not a "could be chained": it is the point where this stops
-being the operator's own account and needs the programme's written approval. Write the
-propagation step into `blocked-tests/` with the read-path proof and keep the PoC to one
-account.
+being the operator's own account. It is one of the four that still park (`cbh autonomy`):
+write the propagation step into `blocked-tests/` with the read-path proof and the declaration
+`**Park:** other-user-data`, and keep the PoC to one account.
 
 **Chain:** needs `fetch-path-concat`, `postmessage-channel-reachable` · gives
 `cspt-zero-click-source`

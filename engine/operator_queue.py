@@ -62,8 +62,14 @@ OPERATOR = re.compile(
 # as `leads/cloud-own-file-idor.md` (closed-exhausted)", and a case-sensitive pattern read it
 # as open. The words are checked against the file's own header lines, not the whole body,
 # because "if unblocked we could ..." in prose must not close anything.
-CLOSED = re.compile(r"\b(CLOSED|RESOLVED|SUPERSEDED|UNBLOCK(?:ED)?|DONE|ANSWERED|"
-                    r"NO LONGER BLOCKED|VERIFIED NEGATIVE)\b", re.I)
+# The lookarounds reject a hyphen on either side, because `\b` treats one as a word boundary:
+# "Host: ... re-resolved this lane, gate IN-SCOPE" in an OPEN blocked test matched `\bRESOLVED\b`
+# and dropped a live Kcell-approval item out of this queue entirely (measured 2026-11-13 on
+# rteam/activ/blocked-tests/investors.kcell.kz-popup-builder-cve-2023-6000-unauth-store-needs-approval.md,
+# whose header says "re-resolved"). A real status banner ("UNBLOCKED 2026-11-11 — ...",
+# "CLOSED: ...") is unaffected: those words stand alone.
+CLOSED = re.compile(r"(?<![-\w])(CLOSED|RESOLVED|SUPERSEDED|UNBLOCK(?:ED)?|DONE|ANSWERED|"
+                    r"NO LONGER BLOCKED|VERIFIED NEGATIVE)(?![-\w])", re.I)
 POLICY = re.compile(r"prohibits? (any )?AI agents", re.I)
 # A decision is a file that says, in its own words, that nothing will move until the operator
 # (or the programme) answers. Both spellings exist in the corpus: the filename prefix the
@@ -72,6 +78,8 @@ DECISION_NAME = re.compile(r"^OPERATOR[-_ ]?DECISION", re.I)
 DECISION_TEXT = re.compile(r"(?:^|\n)[ \t>#*]*(?:\*{0,2}status\*{0,2}[ \t]*[:\u2014\u2013-][ \t]*)?"
                            r"(?:waiting on the operator|operator decision|awaiting the operator|"
                            r"ждет оператора|ждёт оператора)", re.I)
+import autonomy  # noqa: E402
+
 HEADER_LINES = 8
 
 
@@ -205,7 +213,7 @@ def _own_severity(text: str) -> str:
 
 def _scan_blocked(root):
     """Every open blocked test, split into decisions and the rest. One pass, one read each."""
-    decisions, blocks = [], []
+    decisions, blocks, unparked = [], [], []
     for d in _engagements(root):
         bdir = d / "blocked-tests"
         if not bdir.is_dir():
@@ -218,14 +226,36 @@ def _scan_blocked(root):
             row = {"engagement": str(d.relative_to(root)), "file": str(f.relative_to(root)),
                    "title": _title(text) or f.stem, "max_payout": pay,
                    "severity": _own_severity(text)}
+            # Operator directive 2026-11-14: a file only waits on the operator when it
+            # DECLARES a reason the operator cannot grant (`**Park:** other-user-data |
+            # availability | out-of-scope | human-inbox`, `engine/autonomy.py`). Writing
+            # "waiting on the operator" is no longer enough, and neither is a slug saying
+            # `-needs-approval`: a programme-approval question, a write, a POST and an
+            # account nobody holds are now the agent's to fire. 431 files were parked on
+            # 2026-11-14 and none of them declared a reason, so they are listed here once as
+            # UNPARKED — visible, not silently dropped — and go back into the lead queue via
+            # `cbh autonomy --reclassify <eng> --reopen`.
+            park = autonomy.classify(text, d)
+            if not park:
+                row["why"] = "unparked — no `**Park:**` declaration; the agent fires it"
+                unparked.append(row)
+                continue
+            row["park"] = park
             if _is_decision(f, text):
-                row["why"] = "waiting on the operator"
+                row["why"] = f"waiting on the operator — **Park:** {park}"
                 decisions.append(row)
                 continue
-            m = OPERATOR.search("\n".join(text.splitlines()[:25]))
+            # The filename counts as the file's own words: hunters encode the blocker in the
+            # slug (`...-needs-approval.md`, `...-needs-a-session.md`) as often as in a banner,
+            # and DECISION_NAME already trusts a filename the same way. Measured 2026-11-13:
+            # `investors.kcell.kz-popup-builder-cve-2023-6000-unauth-store-needs-approval.md`
+            # was dropped from this queue because its first 25 body lines state the mechanic
+            # and never repeat the word "approval" — a live Kcell-approval item, invisible.
+            m = (OPERATOR.search("\n".join(text.splitlines()[:25]))
+                 or OPERATOR.search(f.stem.replace("-", " ")))
             if not m:
                 continue
-            row["why"] = m.group(0)
+            row["why"] = f"{m.group(0)} — **Park:** {park}"
             blocks.append(row)
     # Own severity first in both lists: a measured Critical must not sort below "needs a
     # buyer account" because both sit in a 1 000 000 programme. Filename last, for a stable
@@ -233,7 +263,8 @@ def _scan_blocked(root):
     key = lambda r: (-SEV_RANK.get(r["severity"], 0), -r["max_payout"], r["file"])  # noqa: E731
     decisions.sort(key=key)
     blocks.sort(key=key)
-    return decisions, blocks
+    unparked.sort(key=key)
+    return decisions, blocks, unparked
 
 
 def operator_decisions(root=None):
@@ -242,6 +273,11 @@ def operator_decisions(root=None):
 
 def operator_blocks(root=None):
     return _scan_blocked(root or _targets())[1]
+
+
+def operator_unparked(root=None):
+    """Parked files that declare no retained reason — the agent's lanes now, not the operator's."""
+    return _scan_blocked(root or _targets())[2]
 
 
 def chain_operator_caps(root=None):
@@ -262,7 +298,7 @@ def chain_operator_caps(root=None):
     return out
 
 
-def render(reports, blocks, caps=(), decisions=()) -> str:
+def render(reports, blocks, caps=(), decisions=(), unparked=()) -> str:
     L = ["# Operator queue", "",
          "_Generated by `engine/operator_queue.py` from findings/, submissions.txt and blocked-tests/. "
          "Do not edit by hand — fix the source file and it regenerates (`cbh queue`, and every session start)._", ""]
@@ -311,12 +347,31 @@ def render(reports, blocks, caps=(), decisions=()) -> str:
             L.append(f"| {c['unblocks']} | {c['engagement']} | `{c['cap']}` | {c['max_payout']:,} |".replace(",", " "))
     else:
         L += ["None annotated."]
+    # Section 4 exists so the directive is auditable rather than a silent deletion: these are
+    # the files that used to be rows 0 and 2 of this queue. They are not asks. Operator
+    # directive 2026-11-14: a park has to declare one of `cbh autonomy`'s reasons, and none
+    # of the 431 legacy files did.
+    L += ["", f"## 4. Unparked — no longer waiting on you — {len(unparked)}", "",
+          "These parked tests declare no `**Park:**` reason, so they are the agent's lanes. "
+          "`cbh autonomy --reclassify <engagement> --reopen` puts them back in `cbh leads`. "
+          "If one of them really does need another person's data, availability, an "
+          "out-of-scope host or a human's inbox, the lane that reads it adds "
+          "`**Park:** <reason>` and it returns to section 2.", ""]
+    if unparked:
+        L += ["| Severity | Max payout | Engagement | Blocked test |", "|---|---|---|---|"]
+        for u in unparked[:60]:
+            L.append(f"| {u['severity']} | {u['max_payout']:,} | {u['engagement']} | "
+                     f"`{u['file']}` — {u['title']} |".replace(",", " "))
+        if len(unparked) > 60:
+            L += ["", f"…and {len(unparked) - 60} more."]
+    else:
+        L += ["None."]
     return "\n".join(L) + "\n"
 
 
 def build(write=True, root=None):
     root = root or _targets()
-    decisions, blocks = _scan_blocked(root)
+    decisions, blocks, unparked = _scan_blocked(root)
     reports = ready_reports(root)
     try:
         caps = chain_operator_caps(root)
@@ -324,8 +379,8 @@ def build(write=True, root=None):
         caps = []
     if write:
         (root / "OPERATOR-QUEUE.md").write_text(
-            render(reports, blocks, caps, decisions), encoding="utf-8")
-    return reports, blocks, caps, decisions
+            render(reports, blocks, caps, decisions, unparked), encoding="utf-8")
+    return reports, blocks, caps, decisions, unparked
 
 
 def brief_line(engagement_rel: str | None = None, root=None) -> str:
@@ -334,7 +389,7 @@ def brief_line(engagement_rel: str | None = None, root=None) -> str:
     The old line said "N block(s) waiting on you" and nothing else, so the operator read a
     number where the queue held a measured Critical RCE. A count is not a surfacing.
     """
-    reports, blocks, _caps, decisions = build(write=root is None, root=root)
+    reports, blocks, _caps, decisions, unparked = build(write=root is None, root=root)
     demo = [r for r in reports if r["evidence"] == "DEMONSTRATED"]
     if not reports and not blocks and not decisions:
         return ""
@@ -350,9 +405,13 @@ def brief_line(engagement_rel: str | None = None, root=None) -> str:
         top = here[0] if here else top
         head = (f"DECISION WAITING ({len(decisions)} total): [{top['severity']}] "
                 f"{top['file']} — {top['title']}\n")
+    # The unparked count is the directive made visible: files that used to sit here are now
+    # lanes. It is printed so the operator sees the backlog move, not so they act on it.
+    tail = (f", {len(unparked)} unparked (the agent's lanes now, `cbh autonomy --reclassify "
+            f"<eng> --reopen`)" if unparked else "")
     return (head
             + f"OPERATOR QUEUE: {len(demo)} finding(s) with a passing PoC not yet submitted "
-              f"(check impact){mine}, {len(blocks)} block(s) waiting on you "
+              f"(check impact){mine}, {len(blocks)} block(s) waiting on you{tail} "
               f"→ Targets/OPERATOR-QUEUE.md")
 
 
@@ -397,9 +456,9 @@ def main(argv=None):
         ap.add_argument("--note", default="")
         a = ap.parse_args(argv[1:])
         return resolve(a.file, a.verdict, a.note)
-    reports, blocks, caps, decisions = build(write="--no-write" not in argv)
+    reports, blocks, caps, decisions, unparked = build(write="--no-write" not in argv)
     if "--print" in argv:
-        print(render(reports, blocks, caps, decisions))
+        print(render(reports, blocks, caps, decisions, unparked))
     else:
         print(brief_line() or "operator queue empty")
     return 0

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# jadx — the CLI decompiler, wrapped because this box breaks it in two ways at once.
+#
+# Measured 2026-11-13 on the Activ APK lane, which lost its full-APK decompile to both:
+#   1. `tools/jadx/bin/jadx` dies with `ERROR: JAVA_HOME is not set and no 'java' command
+#      could be found in your PATH` — there is no system JVM here, only the private JDK
+#      at `tools/jdk`, and nothing exports JAVA_HOME.
+#   2. the obvious fallback, `java -jar lib/jadx-1.5.6-all.jar`, starts the GUI: that
+#      jar's Main-Class is `jadx.gui.JadxGUI`, so on a box with no display it crashes in
+#      `java.desktop/java.awt.EventDispatchThread` and writes no sources at all. The CLI
+#      entry point is `jadx.cli.JadxCLI`, which is what `bin/jadx` runs.
+# The lane read a zero exit from its wrapper plus a non-empty log and believed the
+# decompile had happened. `heavy-run` propagates a child's status correctly; a GUI that
+# dies after its own splash screen is simply not a failing child.
+#
+# So this wrapper sets JAVA_HOME, reaches the CLI entry point only, and caps the run's
+# memory (a 160 MB APK is exactly the case `heavy-run` was written for). The cap is
+# skipped when `heavy-run` already set HEAVY_RUN_CAP_MB, so `heavy-run -- jadx ...`
+# stays correct too.
+# Read its exit code the way jadx means it: 0 = clean, **3 = "finished with errors,
+# count: N"** (some classes failed, the rest are written — a 2026-11-13 full run of the
+# Activ APK wrote 23 293 .java files and still exited 3), 1 = fatal. Count the output
+# before calling a run failed, and say in the write-up how many classes were lost.
+set -u
+JADX_HOME="${JADX_HOME:-$HOME/security-research/tools/jadx}"
+: "${JAVA_HOME:=$HOME/security-research/tools/jdk}"
+export JAVA_HOME
+if [ ! -x "$JAVA_HOME/bin/java" ]; then
+  echo "jadx: no JVM at $JAVA_HOME/bin/java — set JAVA_HOME to a JDK" >&2
+  exit 3
+fi
+if [ ! -x "$JADX_HOME/bin/jadx" ]; then
+  echo "jadx: no launcher at $JADX_HOME/bin/jadx — set JADX_HOME" >&2
+  exit 3
+fi
+if [ -z "${HEAVY_RUN_CAP_MB:-}" ] && command -v heavy-run >/dev/null 2>&1; then
+  exec heavy-run -- "$JADX_HOME/bin/jadx" "$@"
+fi
+exec "$JADX_HOME/bin/jadx" "$@"

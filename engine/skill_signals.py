@@ -27,6 +27,16 @@ PATH_SIGNALS: List[Tuple[str, str, str, bool]] = [
     (r"/graphql",                       "graphql",               "hunt-graphql",           True),
     (r"/(oauth|authorize|token)\b",     "oauth",                 "hunt-oauth",             True),
     (r"/(saml|sso)\b",                  "saml",                  "hunt-saml",              True),
+    # The token-purpose surface (CVE-2026-114607). Measured 2026-11-17: a Grok run asked for the
+    # ladder of `/api/auth/magic-link/verify?token=abc` and `hunt-oauth` appeared only in a
+    # `defer:` column — nothing ranked it, because `?token=` is a query parameter and so misses
+    # the `/(oauth|authorize|token)\b` path signal, while `/verify` and `/auth` route to
+    # hunt-mfa-bypass and hunt-auth-bypass instead. A skill the ladder never names is a skill no
+    # lane loads, however good its text is. Narrow tokens only: bare `/verify` already belongs
+    # to hunt-mfa-bypass and must stay there.
+    (r"/(magic-?link|passwordless|email-link|device[-_]code)\b",
+                                        "token-purpose",         "hunt-oauth",             True),
+    (r"/sign-?in/(social|oauth|provider)", "oauth",              "hunt-oauth",             True),
     (r"/(otp|verify|2fa|mfa|resend)\b", "mfa",                   "hunt-mfa-bypass",        True),
     (r"/(login|signin|signup|register|auth)\b", "auth-bypass",   "hunt-auth-bypass",       True),
     (r"/(upload|attachment|avatar)",    "file-upload",           "hunt-file-upload",       True),

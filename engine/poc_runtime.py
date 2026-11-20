@@ -245,6 +245,16 @@ class _RecordingRedirect(urllib.request.HTTPRedirectHandler):
             "set_cookie": headers.get_all("Set-Cookie") or [],
         }
         self.hops.append(hop)
+        if not self.follow:
+            # The spec never intended to fetch this hop, so nothing is sent and the
+            # gate has nothing to refuse. Recording a gate block here poisoned the
+            # verdict: `evaluate()` short-circuits on a non-empty `redirects_blocked`
+            # before it reads `expect`, so a claim that asserts on the raw 3xx (an
+            # off-host `Location`, an NXDOMAIN destination) could never reach PASS
+            # however the spec was written — observed 2026-11-13 on two separate
+            # redirect claims. The destination is still recorded in `hops`.
+            hop["not_followed"] = "spec set follow_redirects: false"
+            return None  # urllib then surfaces the raw 3xx as an HTTPError
         if self.gate is not None:
             reason = self.gate(newurl)
             if reason is not None:
@@ -253,8 +263,6 @@ class _RecordingRedirect(urllib.request.HTTPRedirectHandler):
                 # Nothing is sent to this host. urllib surfaces the raw 3xx, which
                 # is also the honest artefact: the chain stopped at the perimeter.
                 return None
-        if not self.follow:
-            return None  # urllib then surfaces the raw 3xx as an HTTPError
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 

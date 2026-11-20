@@ -12,6 +12,33 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+
+_PINNED = {}
+
+
+def setUpModule():
+    """Pin the Claude row: these assertions are ABOUT it.
+
+    `engine/crew.py` derives the crew from the client row, so the numbers below (the
+    in-process cap of 3, the one-worker budget) are Claude's. Launched from a Grok process
+    the ambient row is `generic` (crew 6) and nine of these failed for that reason alone —
+    measured 2026-11-17. See the longer note in tests/test_crew_gate.py.
+    """
+    import os
+    for k in ("CBH_AGENT", "GROK_AGENT", "GROK_SESSION_ID"):
+        _PINNED[k] = os.environ.get(k)
+    os.environ["CBH_AGENT"] = "claude"
+    os.environ.pop("GROK_AGENT", None)
+    os.environ.pop("GROK_SESSION_ID", None)
+
+
+def tearDownModule():
+    import os
+    for k, v in _PINNED.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 sys.path.insert(0, str(REPO / "engine"))
 
 import crew as C  # noqa: E402
@@ -233,3 +260,46 @@ class WiredIn(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheEngagementNumberOutranksTheClientRow(unittest.TestCase):
+    """`"hunt_agents"` in profile.json OVERRIDES any crew number — for EVERY client.
+
+    `plan()` returned the non-Claude default before it consulted the override, so for any
+    client but Claude Code the engagement's own number was silently dropped. It was
+    invisible while both happened to be 6; setting an engagement to 3 to protect a fragile
+    target would still have run 6 workers against it. The number is a safety knob as much
+    as a speed one, so this is pinned in both directions.
+    """
+
+    def _plan(self, client_name, hunt_agents):
+        profile = {"min_interval_seconds": 0.1}
+        if hunt_agents is not None:
+            profile["hunt_agents"] = hunt_agents
+        real_client = C._client
+        with _pinned(FakeEngagement("t", 0.1, profile), in_process=False):
+            C._client = lambda: client_name
+            try:
+                return C.plan()
+            finally:
+                C._client = real_client
+
+    def test_a_non_claude_client_honours_a_SMALLER_number(self):
+        p = self._plan("generic", 2)
+        self.assertEqual(p["agents"], 2)
+        self.assertIn("hunt_agents", p["source"])
+
+    def test_a_non_claude_client_honours_a_LARGER_number(self):
+        self.assertEqual(self._plan("generic", 9)["agents"], 9)
+
+    def test_without_an_override_the_client_default_still_applies(self):
+        """Positive control: the override is what changed, not the default."""
+        p = self._plan("generic", None)
+        self.assertEqual(p["agents"], C.NON_CLAUDE_AGENTS)
+        self.assertIn("always", p["source"])
+
+    def test_claude_code_was_already_right_and_stays_right(self):
+        self.assertEqual(self._plan("claude", 2)["agents"], 2)
+
+    def test_the_hard_max_still_binds_whoever_asks(self):
+        self.assertEqual(self._plan("generic", 10_000)["agents"], C.HARD_MAX)

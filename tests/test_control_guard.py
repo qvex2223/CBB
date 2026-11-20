@@ -11,6 +11,18 @@ SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "control-guard.py"
 def run(tool, tool_input, role="worker"):
     env = dict(os.environ)
     env.pop("CBH_AGENT_ROLE", None)
+    # `_from_env()` in engine/client.py checks GROK_AGENT / GROK_SESSION_ID BEFORE
+    # CLAUDECODE, by design: Grok Build's compat layer leaks CLAUDECODE=1, so the Grok
+    # markers have to win there. The consequence here is that popping CBH_AGENT and
+    # setting CLAUDECODE=1 does NOT pin Claude while the suite is launched from a Grok
+    # process — the inherited marker still decides, the gate correctly leaves that client
+    # alone, and the assertion below fails for an environmental reason. Measured
+    # 2026-11-17 from inside Grok Build: 13 failures and 3 errors across test_crew,
+    # test_crew_gate, test_control_guard and test_mcp_gate, with the same tree green under
+    # Claude Code. A test must pin the row it asserts.
+    env.pop("GROK_AGENT", None)
+    env.pop("GROK_SESSION_ID", None)
+    env["CBH_AGENT"] = "claude"
     if role:
         env["CBH_AGENT_ROLE"] = role
     p = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(

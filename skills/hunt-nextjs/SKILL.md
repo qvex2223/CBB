@@ -263,9 +263,9 @@ CBH_PROJECT=$P bbcurl -si -X POST "https://$TARGET/" \
 ```
 
 Stop at reachability. The framing payload itself goes to `blocked-tests/` with the
-version reading and the `content-type: text/x-component` capture until the programme's
-scope text is checked for a memory-corruption / crash clause: a parser confusion that
-lands wrong takes the host down, which is forbidden on every engagement here.
+version reading, the `content-type: text/x-component` capture and `**Park:** availability`
+declared: a parser confusion that lands wrong takes the host down, which is forbidden on
+every engagement here and is not a permission the operator can give (`cbh autonomy`).
 
 **Chain:** needs `nextjs-version-in-range`, `flight-parser-unauthenticated` · gives
 `unauth-rce-candidate`
@@ -300,3 +300,47 @@ lands wrong takes the host down, which is forbidden on every engagement here.
 - Image SSRF → cloud metadata: Critical
 - Middleware bypass → admin panel: High
 - Source map exposure only: Low-Medium
+
+---
+
+## Cache Components (`use cache`) — identity confusion, not key confusion
+
+Seven Next.js advisories shipped 3 November 2026 and six of them are the cache. Patched in
+**16.4.5** (Active LTS) and **15.5.29** (Maintenance LTS); confirm each range at its GHSA rather
+than from any write-up, including this one.
+
+Two arms are deterministic and belong here. Both are about the **identity** a cached entry is
+stored under, which is computed from the function's arguments — a different question from the CDN
+cache *key* that `hunt-cache-poison` owns.
+
+**Colliding identity for distinct arguments — GHSA-rhh4-g77r-r9qj / CVE-2026-119349.** "Distinct
+binary arguments passed to a `use cache` function can produce the same cache identity." So find a
+cached function reached with argument types the identity hash flattens — a Buffer or typed array,
+a `Date`, a class instance, anything whose serialization is lossy — and call it twice with values
+that differ only in the flattened part. One caller's result is served to the other. This is a
+hashing bug, not a race: two sequential requests show it.
+
+**Nested `use cache` storing before the inner scope is recorded — GHSA-vc7v-qv4w-wrv8 /
+CVE-2026-119351.** "The outer entry can be stored before the inner function's root-parameter
+dependencies are recorded," disclosing "tenant-, site-, or locale-specific content." Hold the
+outer function's arguments still and vary only the inner scope (tenant, site, locale, user). If
+the outer entry was stored first, the second caller gets the first caller's inner content.
+
+**Excluded on purpose: the cold-fill race, CVE-2026-119790.** "During a cold cache fill, a
+concurrent call through `unstable_cache` can receive another request's result without checking
+its root parameters", and that result "can then be stored and served to later callers". Real, and
+the most serious of the set — and it needs concurrent requests against a live target, which is
+blast radius on other users and on availability. It is not in the mutation matrix, and it is not
+tested here. If the stack and version match, write it up as a version-based finding and park the
+exploitation with `**Park:** availability`.
+
+**Also in the same release, not cache bugs:** CVE-2026-119350 (shared shell cache poisoning,
+self-hosted `next start` only — persistent 404s and wrong SSR content, *not* cross-tenant
+content), CVE-2026-119348 (cross-client response injection via stale compression framing, needs an
+HTTP/1.1 reverse proxy with pipelining), CVE-2026-119347 (an image misclassified as AVIF bypasses
+`images.dangerouslyAllowSVG: false`; the source allowlist still holds), CVE-2026-119346
+(`HttpOnly` cookie readable by same-origin JS through the internal `x-middleware-set-cookie`
+header, Edge route handlers using `NextResponse.cookies.set()`).
+
+**SKIP** — `hunt-cache-poison` for CDN/edge key manipulation, which is a different layer.
+

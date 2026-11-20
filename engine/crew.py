@@ -143,10 +143,23 @@ def plan(project: str = "", credits_pct: float | None = -1.0,
     notes: list[str] = []
     default_used = False
     if _client() != "claude":
-        agents = NON_CLAUDE_AGENTS
+        # The engagement's own number still wins. Root AGENTS.md: `"hunt_agents"` in
+        # profile.json OVERRIDES any crew number — and this branch returned
+        # NON_CLAUDE_AGENTS before it was consulted, so for every non-Claude client the
+        # override was silently dropped. It happened to be invisible while both numbers
+        # were 6; set an engagement to 3 to protect a fragile target and that client would
+        # still have run 6. The number is also a safety knob, not only a speed one.
+        agents = NON_CLAUDE_AGENTS if override is None else max(1, min(HARD_MAX, override))
         routed = _in_process_workers()
-        notes.append(f"client {_client()}: always {NON_CLAUDE_AGENTS} subagents, "
-                     "no quota-based cut")
+        if override is None:
+            notes.append(f"client {_client()}: always {NON_CLAUDE_AGENTS} subagents, "
+                         "no quota-based cut")
+            source = f"{_client()}: always {NON_CLAUDE_AGENTS} (operator directive 2026-11-10)"
+        else:
+            notes.append(f"client {_client()}: no quota-based cut, and the engagement's own "
+                         f'"hunt_agents": {override} outranks the client default of '
+                         f"{NON_CLAUDE_AGENTS}")
+            source = f'"hunt_agents": {override} in profile.json (operator override)'
         if agents > budget_useful:
             notes.append(f"the budget only feeds {budget_useful}: the extra "
                          f"{agents - budget_useful} will queue on the flock without "
@@ -154,7 +167,7 @@ def plan(project: str = "", credits_pct: float | None = -1.0,
         return {"engagement": eng.name, "agents": agents, "in_process_cap": agents,
                 "min_interval_seconds": interval, "ceiling_rps": ceiling_rps,
                 "budget_useful": budget_useful, "credits_left_pct": None,
-                "source": f"{_client()}: always {NON_CLAUDE_AGENTS} (operator directive 2026-11-10)",
+                "source": source,
                 "notes": notes, "in_process": routed, "client": _client()}
     if override is None and DEFAULT_HUNT_AGENTS:
         override, default_used = DEFAULT_HUNT_AGENTS, True

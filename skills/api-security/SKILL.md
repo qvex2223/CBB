@@ -15,8 +15,9 @@ Ported from ARTEX. Same method, this workspace's plumbing:
   `/validate`.
 - "A second account or role proves the boundary is real" is the workspace rule too: identities
   first (owner + member + outsider + a second tenant) before the first payload, and **own accounts
-  only**. No account for a role → `cbh identity new <url>` + self-registration; walled → write it
-  under `blocked-tests/` and keep going on what you have.
+  only**. No account for a role → `cbh identity new <url>` + self-registration. A registration
+  wall is ONE vector, not a park and not an ask (`cbh autonomy`): note it in `blocked-tests/`
+  without a `**Park:**` line — so it stays a workable lane — and keep going on what you have.
 - Same operation, second interface, is the highest-yield move here: REST vs GraphQL vs a Next.js
   Server Action vs the mobile/partner API vs export/import. The check usually lives on only one of
   them; prove it by reading the state back (`cbh doctrine`, rule 3).
@@ -148,3 +149,48 @@ The upstream playbook also names Vespasian, Entropy, Escape DAST, FireTail, and 
 - [ ] every executed phase produced artifacts (requests, responses, diffs) in the work dir.
 - [ ] each access-control finding was confirmed with a second session or role.
 - [ ] nothing in the report relies on a tool or output you did not actually run.
+
+## Nested references defeat a 404
+
+When a BOLA probe answers `404`, do not close it. Census every request field that names
+another object — `reply`, `parent_id`, `source_id`, `template_id`, `copy_from`,
+`import_from` — and check whether the handler scopes that lookup by the reference's own
+key instead of by your tenant. If it does, the server fetches the foreign object for you
+and copies it into one you own, while the direct route still answers `404`. The oracle on
+an id you already hold: `200` = hit, `500` = the object exists but your inner key is wrong,
+`404` = no such id. Never sweep the id space for it — see `hunt-idor` for why that is
+unaimable and bans the source IP.
+
+**SKIP** — `hunt-idor` owns the full write-up of this class; this entry exists so a BOLA
+matrix does not record a `404` as a closed cell.
+
+---
+
+## Trust that survives a transfer of ownership
+
+Authorization is usually tested against the grants an identity holds now. Test the other
+direction: what still trusts an object after the object changed hands. Trust recorded against a
+**permanent id** — a repo id, a project id, a connected-source id — is not revoked when ownership
+moves, so the new owner inherits whatever that id was trusted for.
+
+**Worked example — CVE-2026-118535 (Gitea, High 7.3, `>= 1.27.0`, fixed 28.4.0).**
+`ActionScopedWorkflowSource` stores the consuming scope's `OwnerID` and the source's stable
+`SourceRepoID`. Owner-level enrollment resolves only repositories the owner holds *now*, but
+dispatch loads the source by id without re-checking its new owner. Transfer changes the source's
+owner and leaves the trust row intact; the new owner edits the workflow and it runs with the
+consumer's plaintext secrets and a write-scoped token for repositories the attacker gets `404`
+for. The advisory's own argument that this is a missed lifecycle check rather than intended
+behaviour: deletion *does* remove those rows, and transfer already removes the repo from the old
+owner's `AllowedCrossRepoIDs`.
+
+**How to test it on your own accounts.** Two identities you hold. Create the object under A,
+enroll it wherever it can be trusted (CI source, webhook, allowlist, shared secret scope),
+transfer it to B, then from B change what the object does and see what still runs. A lane needing
+the second identity is marked `REGISTER FIRST`, not held back.
+
+**Where else the shape appears:** transferring a project between workspaces, moving a repository
+between orgs, re-parenting a team, changing the owner of an API client or service account.
+
+**SKIP** — `hunt-invariants` states the invariant this breaks; `hunt-idor` carries it as a
+mutation on the object-ownership ladder.
+

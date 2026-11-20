@@ -150,6 +150,36 @@ def _signature(message: str) -> str:
     return re.sub(r"\s+", " ", s)[:160]
 
 
+# Which client a row came from. Several agent CLIs share this file, and the session
+# brief is read by one of them: measured 2026-11-20, 250 of 314 rows over 72 h were
+# `run_terminal_command` from another client, so the one-line brief a Claude session
+# opened with was three quarters someone else's errors. New rows carry `client`;
+# legacy rows are inferred from the tool name (Claude Code's own tools and its
+# `mcp__`-prefixed MCP tools vs anything else).
+_CLAUDE_TOOLS = frozenset({
+    "Bash", "Read", "Edit", "Write", "Glob", "Grep", "Agent", "Task", "WebFetch",
+    "WebSearch", "NotebookEdit", "Skill", "ToolSearch", "Monitor", "TaskStop",
+    "SendMessage", "AskUserQuestion", "Artifact", "ListAgents",
+})
+
+
+def _current_client() -> str:
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import client as _C  # type: ignore
+        return _C.detect()
+    except Exception:  # noqa: BLE001 - a logger must never break the caller
+        return ""
+
+
+def row_client(row: dict) -> str:
+    """The client that wrote `row`: its own field, else inferred from the tool name."""
+    if row.get("client"):
+        return row["client"]
+    tool = row.get("tool") or ""
+    return "claude" if (tool in _CLAUDE_TOOLS or tool.startswith("mcp__")) else "other"
+
+
 def row_for(ev: dict, now: str | None = None) -> dict | None:
     """Build the row for a hook payload, or None when this is not an error."""
     event = ev.get("hook_event_name") or ev.get("hookEventName") or ""
@@ -174,6 +204,7 @@ def row_for(ev: dict, now: str | None = None) -> dict | None:
         "agent_id": agent_id,
         "actor": "subagent" if agent_id else (os.environ.get("CBH_AGENT_ROLE") or "main"),
         "engagement": os.environ.get("CBH_PROJECT") or "",
+        "client": _current_client(),
         "cwd": ev.get("cwd") or os.getcwd(),
         "cmd": _redact_cmd(str(cmd)),
         "message": _scrub(message),
@@ -317,11 +348,18 @@ def main(argv=None) -> int:
         day = load(since=_parse_since("24h"))
         if not day:
             return 0
+        me = _current_client() or "generic"
+        mine = [r for r in day if row_client(r) == me
+                or (me != "claude" and row_client(r) == "other")]
+        others = len(day) - len(mine)
+        if not mine:
+            return 0
         by = {}
-        for r in day:
+        for r in mine:
             by[r.get("kind", "?")] = by.get(r.get("kind", "?"), 0) + 1
         top = ", ".join(f"{k} {v}" for k, v in sorted(by.items(), key=lambda x: -x[1])[:3])
-        print(f"ERRORS (24h): {len(day)} — {top} · detail `cbh errors --since 24h`")
+        tail = f" · other clients {others}" if others else ""
+        print(f"ERRORS (24h, {me}): {len(mine)} — {top}{tail} · detail `cbh errors --since 24h`")
         return 0
 
     if a.json:

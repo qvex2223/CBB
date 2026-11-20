@@ -42,7 +42,7 @@ DEFAULT_PHASES = ["recon", "rank", "map"]
 
 class Engine:
     def __init__(self, scope_path, base, model, max_hunts, max_turns, timeout, mock=False,
-                 allow_intrusive=False, parallel=3, expand=False):
+                 allow_intrusive=True, parallel=3, expand=False):
         self.scope = Scope.load(scope_path)
         self.request_broker = RequestBroker.detect(Path(scope_path).resolve().parent,
                                                    scope=self.scope, source="engine-recon",
@@ -55,7 +55,7 @@ class Engine:
         self.parallel = max(1, parallel)
         self.eng.log(f"engine start | scope={self.scope.name} in={self.scope.in_scope} "
                      f"out={self.scope.out_of_scope} seeds={self.scope.seeds} mock={mock} "
-                     f"intrusive={'ALLOWED' if allow_intrusive else 'READ-ONLY (default)'}")
+                     f"intrusive={'ALLOWED (default)' if allow_intrusive else 'READ-ONLY (--read-only)'}")
 
     # ---------------- rules of engagement (injected into every agent) ----------------
     def _roe(self):
@@ -95,11 +95,25 @@ class Engine:
             roe += ("- UNATTENDED RUN (continuous mode is on): the operator is not available "
                     "for credentials, phone numbers or decisions. A registration you cannot "
                     "complete blocks ONE vector: write it under "
-                    "`Targets/<project>/blocked-tests/` with the reason and continue "
+                    "`Targets/<project>/blocked-tests/` with a `**Park:**` line naming one of "
+                    "`cbh autonomy`'s reasons, and continue "
                     "(another provider, another registration route, the unauthenticated "
                     "surface, another in-scope host). A proven Medium+ is banked in "
                     "`findings/` and the sweep continues. Harness or classifier denials are "
                     "respected, never routed around.\n")
+        # Operator directive 2026-11-14: "я хочу чтобы он всё тестировал и без моего
+        # разрешения". The read-only ROE below was the machine that produced the parked pile:
+        # with `allow_intrusive=False` (the old default) it told every agent "no
+        # writes/updates/deletes, no account creation, NEVER SUBMIT A WEB FORM", and
+        # `…-needs-a-post`, `…-write-shaped-…` and `…-anonymous-create` were 36 of
+        # wildberries' 74 parked files alone. The default is now the closed parking list from
+        # `engine/autonomy.py`, and read-only is an explicit opt-in (`--read-only`).
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import autonomy  # type: ignore
+            roe += "- " + autonomy.clause().replace("\n", "\n  ") + "\n"
+        except Exception:  # noqa: BLE001
+            pass
         if not self.allow_intrusive:
             roe += ("- READ-ONLY / NON-DESTRUCTIVE: do NOT perform any state-changing or intrusive action — no sending "
                     "emails, no writes/updates/deletes, no cache purge/revalidate, no account creation, no spam, no "
@@ -530,8 +544,11 @@ def main():
     ap.add_argument("--max-turns", type=int, default=40)
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--mock", action="store_true", help="dry-run the orchestration with canned agent output")
-    ap.add_argument("--allow-intrusive", action="store_true",
-                    help="permit state-changing PoCs (emails/writes/purges). DEFAULT OFF = read-only, non-destructive.")
+    ap.add_argument("--allow-intrusive", action="store_true", default=True,
+                    help="permit state-changing PoCs. DEFAULT ON since 2026-11-14 (operator directive); "
+                         "`--read-only` is the opt-out.")
+    ap.add_argument("--read-only", dest="allow_intrusive", action="store_false",
+                    help="read-only, non-destructive: no writes, no account creation, no form submission.")
     ap.add_argument("--parallel", type=int, default=3, help="concurrent hunt/validate agents (default 3)")
     ap.add_argument("--expand", action="store_true",
                     help="OSINT bridge: enumerate subdomains, probe, and recon every live in-scope host "

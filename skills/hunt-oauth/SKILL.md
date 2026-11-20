@@ -418,3 +418,48 @@ A server-side prefix-match flaw on `redirect_uri` is **necessary but not suffici
 Compare the scopes the consent UI displays with the scopes in the issued token (introspect or
 `/oauth/token/info`). A scope granted but not shown (GitLab `manage_runners:org`) is a
 misrepresentation bug. Medium on its own, more when the hidden scope is privileged.
+
+---
+
+## Token Purpose Confusion — One Store, Two Flows
+
+**Class:** `token-purpose`. Check this on any app that runs OAuth **and** a second token flow —
+magic link, email invite, password reset, device code. The bug is not in either flow; it is that
+both keep their records in one table, indexed by token, with no column recording which flow
+created the row. A verifier then reads a row it did not mint, trusts the field it cares about and
+issues a session for whatever identity that field names.
+
+**Census before any payload.** Two questions, both answerable from the client bundle and the
+corpus: does a second token flow exist, and do the two flows' tokens look like they come from one
+generator? A shared length, alphabet or prefix is a hint; a shared *store* is the bug, and that
+only the behaviour shows.
+
+**Worked example — CVE-2026-114607 (Better Auth, CVSS 9.1, `>= 1.4.0-beta.18, < 1.7.7`, fixed
+1.7.7, GHSA-965c-763c-88jm).** OAuth `state` rows and magic-link tokens share the `verification`
+store. Since 1.4.0-beta.18 the social sign-in endpoint spreads an attacker-supplied
+`additionalData` object **top-level** into the state JSON, so it lands exactly where the
+magic-link verifier reads `email`:
+
+1. `POST /api/auth/sign-in/social` with the provider id, `disableRedirect: true`, a callback URL
+   and `additionalData: {"email": "victim@..."}`. The response `url` field carries the `state`.
+2. `GET /api/auth/magic-link/verify?token=<state>` — the verifier finds the state row, reads
+   `email`, calls `createSession(user.id)` and sets `better-auth.session_token`.
+3. `GET /api/auth/get-session` returns the victim. If the address has no account and sign-up is
+   enabled, it instead creates a fresh `emailVerified` one.
+
+**Two details that decide whether your attempt works at all.** The address must sit **inside
+`additionalData`**, not at the top level of the body — the one public PoC fails for exactly that
+reason. And the verifier is reached with `?token=`, a GET, not a POST body.
+
+**Do not port their detection heuristic.** The write-up offers a token-charset rule (state tokens
+contain a digit, dash or underscore; genuine magic-link tokens are letters-only). That is lab
+traffic from default generators, and the authors say so. Measure your target's own tokens.
+
+**The fix tells you what to look for.** 1.7.7 prefixes identifiers `auth-state:` and
+`magic-link:` and enforces a schema on the row. So the question to ask of any app is: *is the
+purpose of this record written down anywhere, or only implied by which endpoint reads it?*
+
+**SKIP** — `hunt-session` for fixation and invalidation on a single flow; `hunt-mfa-bypass` when
+the second factor is the step being skipped rather than the record being reused;
+`hunt-ato` once you hold the victim's session and are writing up the chain.
+

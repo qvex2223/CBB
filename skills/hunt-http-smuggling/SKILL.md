@@ -107,11 +107,11 @@ masking — every detector above stays quiet, while the response queue is now of
 - The offset persisting across a `Connection: close` boundary, or appearing on a connection
   you did not open, is the **shared pool** — stop at once: the next response in that queue
   belongs to a real user.
-- Weaponisation (letting the queue serve you someone else's response) is forbidden here
-  without the programme's written approval: it reads another user's data and desynchronises
-  a pool other users are on. Write the offset capture to `blocked-tests/`, file the approval
-  on `cbh queue`, and report the queue offset itself — a proven response-queue desync is a
-  finding without stealing anything.
+- Weaponisation (letting the queue serve you someone else's response) is forbidden here,
+  and no approval unlocks it: it reads another user's data and desynchronises a pool other
+  users are on — both of `cbh autonomy`'s first two reasons at once. Write the offset capture
+  to `blocked-tests/` with `**Park:** other-user-data` declared, and report the queue offset
+  itself — a proven response-queue desync is a finding without stealing anything.
 
 **Chain:** needs `dual-matching-content-length-accepted`, `response-queue-offset-own-connection`
 · gives `response-queue-desync`, `cross-user-response-read-candidate`
